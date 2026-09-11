@@ -63,9 +63,8 @@ model later only changes `model.py`'s output format, nothing downstream.
 ## Running it locally
 
 ```bash
-pip install -r requirements.txt
-
 cd backend
+pip install -r requirements.txt
 python fetch_data.py       # ~1 min, needs internet (Overpass API)
 python fetch_imagery.py    # ~1 min, needs internet (Esri tile service)
 python model.py            # ~10s, trains + predicts, no internet needed
