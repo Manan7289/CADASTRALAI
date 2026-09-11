@@ -16,8 +16,18 @@ literature this project's own submission cites uses (Crommelinck et al.):
      centroid gives each building the region of land closer to it than to
      any other building -- a standard, published proxy for an individual
      plot boundary when true ownership lines aren't available.
-  3. Land with no buildings on it (fields, forest, open ground) is left as a
-     single larger parcel rather than artificially subdivided.
+  3. That raw Voronoi cell is then capped to a building's own footprint plus
+     a modest yard/setback margin (PLOT_SETBACK_M below). Without this cap,
+     an isolated building's cell balloons to fill an entire empty block --
+     a single house was coming out with a "residential" parcel over 20
+     hectares, which no real cadastral map would ever show. Real plots in a
+     built-up area run from under a hundred to a few thousand square metres;
+     capping by footprint+setback keeps inferred plots in that range
+     regardless of how sparse the neighbouring buildings are.
+  4. Whatever land is left over after capping every building's plot in a
+     block becomes its own separate vacant/unbuilt parcel (there can be more
+     than one per block) -- instead of being silently absorbed into a
+     neighbouring building's "residential" plot.
 
 Every parcel then gets real attributes: area and perimeter (dimensions),
 land-use (from real OSM landuse tags, or "Residential" if it contains a
@@ -43,9 +53,11 @@ PROC_DIR = Path(__file__).resolve().parent.parent / "data" / "processed"
 ROAD_BUFFER_M = 4       # half-width allowed for an informal road corridor
 RAIL_BUFFER_M = 8       # track + ballast width (separate from the 30m safety buffer check)
 WATER_BUFFER_M = 3
-MIN_PARCEL_M2 = 15      # discard degenerate sliver parcels below this
+MIN_PARCEL_M2 = 25      # discard degenerate sliver parcels below this
 ROAD_CONNECT_M = 200    # same relaxed threshold as rules.py, for the same reason (sparse OSM roads here)
 FAR_MULTIPLIER = 50     # how far outside the AOI the Voronoi "mirror" points sit
+PLOT_SETBACK_M = 7      # yard/setback margin added around a building's own footprint to form its plot;
+                         # caps how large an inferred residential parcel can get regardless of Voronoi cell size
 
 
 def _lines(fc):
@@ -101,6 +113,13 @@ def classify_landuse(parcel_geom, has_building, landuse_polys, govt_union):
         if overlap > best_overlap:
             best_overlap, best_label = overlap, label
     if best_label and best_overlap > 0.3 * parcel_geom.area:
+        # an OSM "residential" zoning tag on land with no building yet describes
+        # a planning designation, not an individual plot -- showing it the same
+        # as an actual house's capped footprint-plot is misleading, so it falls
+        # back to vacant. Other zone tags (farmland, forest, industrial...)
+        # meaningfully describe the land either way, built or not.
+        if best_label == "Residential" and not has_building:
+            return "Vacant / Unclassified"
         return best_label
     return "Residential" if has_building else "Vacant / Unclassified"
 
@@ -170,14 +189,31 @@ def build_parcels():
             continue
         in_block = [b for b in buildings_local if b["centroid"].within(block)]
 
-        if not in_block:
-            cells, members = [block], [[]]
-        else:
+        cells_with_members = []
+        if in_block:
             pts = np.array([[b["centroid"].x, b["centroid"].y] for b in in_block])
-            cells = bounded_voronoi_cells(pts, block)
-            members = [[b] for b in in_block]
+            raw_cells = bounded_voronoi_cells(pts, block)
+            for b, raw_cell in zip(in_block, raw_cells):
+                # cap the raw Voronoi cell to this building's own footprint + a
+                # yard/setback margin, so an isolated building doesn't inherit
+                # the whole surrounding empty block as its "plot"
+                plot_bound = b["geom"].buffer(PLOT_SETBACK_M, join_style=2)
+                capped = raw_cell.intersection(plot_bound)
+                if capped.geom_type == "MultiPolygon":
+                    capped = max(capped.geoms, key=lambda g: g.area) if capped.geoms else Polygon()
+                if not capped.is_empty:
+                    cells_with_members.append((capped, [b]))
 
-        for cell, member_buildings in zip(cells, members):
+        # land left over in this block once every building's plot is capped
+        # becomes its own separate vacant/unbuilt parcel -- not absorbed into
+        # a neighbour's plot
+        claimed = unary_union([c for c, _ in cells_with_members]) if cells_with_members else Polygon()
+        leftover = block.difference(claimed) if not claimed.is_empty else block
+        if not leftover.is_empty:
+            leftover_parts = list(leftover.geoms) if leftover.geom_type == "MultiPolygon" else [leftover]
+            cells_with_members.extend((part, []) for part in leftover_parts)
+
+        for cell, member_buildings in cells_with_members:
             if cell.is_empty or cell.area < MIN_PARCEL_M2:
                 continue
             has_building = len(member_buildings) > 0
