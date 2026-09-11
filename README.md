@@ -60,7 +60,7 @@ baseline demonstrating the same end-to-end architecture described in the
 submission's technical approach; swapping in a properly-trained segmentation
 model later only changes `model.py`'s output format, nothing downstream.
 
-## Running it locally (with the live Flask backend)
+## Running it locally
 
 ```bash
 pip install -r requirements.txt
@@ -69,16 +69,20 @@ cd backend
 python fetch_data.py       # ~1 min, needs internet (Overpass API)
 python fetch_imagery.py    # ~1 min, needs internet (Esri tile service)
 python model.py            # ~10s, trains + predicts, no internet needed
+python build_static.py     # runs the rule engine once, bakes output into frontend/data/
 python app.py              # serves http://127.0.0.1:5050
 ```
 
-Open `http://127.0.0.1:5050`. Everything after `model.py` runs fully offline
-— the satellite mosaic is a local file, Leaflet is vendored locally, and the
-API is your own machine. Only the two `fetch_*` scripts need a network.
+Open `http://127.0.0.1:5050`. `app.py` is a thin Flask server that just
+serves `frontend/` (including `frontend/data/`) — it's the same static
+files Vercel deploys, so what you see locally is exactly what production
+looks like. Only the two `fetch_*` scripts need a network; everything from
+`model.py` onward runs fully offline.
 
-Re-running `model.py` alone (e.g. after tweaking a threshold) is enough to
-refresh the map — just restart `app.py` afterwards so it drops its
-in-memory rule-engine cache.
+Changed the model or a rule and want to see it locally? Rerun `model.py`
+and/or `build_static.py`, then just refresh the browser — no server
+restart needed, since `app.py` reads `frontend/data/` fresh on every
+request.
 
 ## Deploying (Vercel — static, no backend needed)
 
