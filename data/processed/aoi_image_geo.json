@@ -1,0 +1,10 @@
+{
+  "width": 1792,
+  "height": 1792,
+  "lon_nw": 73.553466796875,
+  "lat_nw": 19.707243309274403,
+  "lon_se": 73.57269287109375,
+  "lat_se": 19.689142322388815,
+  "zoom": 17,
+  "source": "Esri World Imagery (public tile service)"
+}
