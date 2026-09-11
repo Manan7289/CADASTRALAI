@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CadastraAI — Upload Your Own Area</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="app.css">
+<style>
+  .upload-wrap{max-width:640px;margin:0 auto;padding:40px 24px 80px;}
+  .card{background:var(--surface);border:1px solid var(--border-soft);border-radius:12px;padding:26px 28px;margin-bottom:20px;}
+  .card h2{font-family:var(--font-display);font-weight:800;font-size:1.3rem;text-transform:uppercase;margin:0 0 6px 0;}
+  .card p.sub{color:var(--text-dim);font-size:0.88rem;margin:0 0 20px 0;line-height:1.5;}
+  label.field{display:block;margin-bottom:16px;}
+  label.field span{display:block;font-family:var(--font-mono);font-size:0.68rem;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint);margin-bottom:6px;}
+  label.field small{display:block;font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-faint);font-size:0.76rem;margin-top:4px;}
+  input[type=file], input[type=number], input[type=text]{
+    width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
+    padding:10px 12px;color:var(--text);font-family:var(--font-mono);font-size:0.86rem;
+  }
+  input:focus{outline:2px solid var(--accent);outline-offset:1px;}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .submit-btn{
+    width:100%;padding:13px;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);
+    color:var(--accent);font-size:0.9rem;font-weight:600;cursor:pointer;font-family:inherit;
+  }
+  .submit-btn:hover{background:rgba(69,199,184,0.24);}
+  .submit-btn:disabled{opacity:0.5;cursor:not-allowed;}
+  .status-box{
+    margin-top:16px;padding:12px 14px;border-radius:8px;font-size:0.85rem;display:none;
+  }
+  .status-box.show{display:block;}
+  .status-box.working{background:var(--accent-soft);border:1px solid rgba(69,199,184,0.35);color:var(--accent);}
+  .status-box.error{background:rgba(226,104,95,0.1);border:1px solid rgba(226,104,95,0.35);color:var(--critical);}
+  .status-box.done{background:rgba(108,190,129,0.1);border:1px solid rgba(108,190,129,0.35);color:var(--ok);}
+  .status-box a{color:inherit;font-weight:600;}
+  .warn-banner{
+    background:rgba(224,169,74,0.08);border:1px solid rgba(224,169,74,0.35);border-radius:10px;
+    padding:14px 16px;font-size:0.82rem;color:var(--text-dim);margin-bottom:24px;line-height:1.5;
+  }
+  .warn-banner b{color:var(--warning);}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="wordmark">CADASTRA<span>AI</span></div>
+      <div class="subtitle">Upload Your Own Area · Team ELAVI</div>
+    </div>
+    <nav class="segmented">
+      <a href="index.html">CADASTRAL MAP</a>
+      <a href="detection.html">COMPLIANCE &amp; DETECTION</a>
+      <a href="upload.html" class="active">UPLOAD YOUR OWN</a>
+    </nav>
+  </header>
+
+  <main style="overflow-y:auto;">
+    <div class="upload-wrap">
+
+      <div class="warn-banner">
+        <b>Needs the local backend.</b> This runs real image processing and live OpenStreetMap
+        lookups on your machine — it only works when you're running <code>python backend/app.py</code>
+        locally. It will not work on the public static demo (there's no server behind that one).
+      </div>
+
+      <div class="card">
+        <h2>Process a drone image or video</h2>
+        <p class="sub">Upload a drone photo, satellite orthoimage, or a short video (its middle frame is used — this is not multi-frame stitching). Tell us roughly where it was taken and how wide an area it covers, and the same detection + parcel + rule-engine pipeline used for the Igatpuri demo runs on it.</p>
+
+        <form id="uploadForm">
+          <label class="field">
+            <span>Image or video file</span>
+            <input type="file" id="fileInput" accept="image/*,video/mp4,video/quicktime,video/x-msvideo,video/webm" required>
+          </label>
+
+          <div class="row2">
+            <label class="field">
+              <span>Centre latitude</span>
+              <input type="text" id="latInput" placeholder="e.g. 19.6975" required>
+            </label>
+            <label class="field">
+              <span>Centre longitude</span>
+              <input type="text" id="lonInput" placeholder="e.g. 73.5600" required>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Approximate ground width (metres)</span>
+            <input type="number" id="widthInput" placeholder="e.g. 300" min="10" required>
+            <small>Roughly how wide a real-world strip the image covers, left edge to right edge. Not sure? A typical single-house drone photo from ~50m altitude covers roughly 60–120m; a wider survey pass covers several hundred metres.</small>
+          </label>
+
+          <button type="submit" class="submit-btn" id="submitBtn">Process Upload</button>
+        </form>
+
+        <div class="status-box" id="statusBox"></div>
+      </div>
+
+      <div class="card">
+        <h2>What's different from the demo</h2>
+        <p class="sub" style="margin-bottom:0;">
+          The Igatpuri demo trains a RandomForest on real, verified OSM building labels for that
+          specific colony. An arbitrary new upload has no labelled ground truth to train on, so
+          building detection here falls back to an unsupervised brightness/texture threshold —
+          it will find obvious rooftops but is less reliable than the trained demo model. Road,
+          rail, water and government-land layers ARE still real: they're fetched live from
+          OpenStreetMap for whatever location you give it.
+        </p>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script>
+(function(){
+"use strict";
+var form = document.getElementById('uploadForm');
+var statusBox = document.getElementById('statusBox');
+var submitBtn = document.getElementById('submitBtn');
+
+function setStatus(kind, html){
+  statusBox.className = 'status-box show ' + kind;
+  statusBox.innerHTML = html;
+}
+
+form.addEventListener('submit', function(e){
+  e.preventDefault();
+  var file = document.getElementById('fileInput').files[0];
+  if(!file){ setStatus('error', 'Choose a file first.'); return; }
+
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('center_lat', document.getElementById('latInput').value);
+  fd.append('center_lon', document.getElementById('lonInput').value);
+  fd.append('width_m', document.getElementById('widthInput').value);
+
+  submitBtn.disabled = true;
+  setStatus('working', 'Processing — detecting structures and fetching real map data for this location. This can take 10–30 seconds…');
+
+  fetch('/api/process', {method:'POST', body:fd})
+    .then(function(r){
+      if(!r.ok){
+        return r.json().then(function(d){ throw new Error(d.error || ('HTTP ' + r.status)); })
+          .catch(function(){ throw new Error('The backend isn\'t reachable — this feature needs `python backend/app.py` running locally, and won\'t work on the public static demo.'); });
+      }
+      return r.json();
+    })
+    .then(function(d){
+      setStatus('done', 'Done — detected ' + d.buildings_detected + ' structures and ' + d.parcels + ' parcels. '+
+        '<a href="index.html?session='+d.session_id+'">View Cadastral Map</a> · '+
+        '<a href="detection.html?session='+d.session_id+'">View Compliance &amp; Detection</a>');
+    })
+    .catch(function(err){
+      setStatus('error', String(err.message || err));
+    })
+    .finally(function(){ submitBtn.disabled = false; });
+});
+})();
+</script>
+</body>
+</html>

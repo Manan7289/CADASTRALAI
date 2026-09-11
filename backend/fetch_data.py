@@ -33,17 +33,17 @@ RAW_DIR = DATA_DIR / "raw"
 PROC_DIR = DATA_DIR / "processed"
 
 
-def overpass(query: str) -> dict:
+def overpass(query: str, timeout: int = 60, attempts: int = 3) -> dict:
     last_err = None
     for endpoint in OVERPASS_ENDPOINTS:
-        for attempt in range(3):
+        for attempt in range(attempts):
             try:
-                r = requests.post(endpoint, data={"data": query}, headers=HEADERS, timeout=60)
+                r = requests.post(endpoint, data={"data": query}, headers=HEADERS, timeout=timeout)
                 r.raise_for_status()
                 return r.json()
             except Exception as e:
                 last_err = e
-                time.sleep(3)
+                time.sleep(2)
     raise RuntimeError(f"Overpass query failed on all endpoints: {last_err}")
 
 
@@ -86,8 +86,8 @@ def feature_collection(features):
     return {"type": "FeatureCollection", "features": features}
 
 
-def fetch_buildings(bbox=BBOX):
-    data = overpass(ways_query(bbox, '["building"]'))
+def fetch_buildings(bbox=BBOX, timeout=60, attempts=3):
+    data = overpass(ways_query(bbox, '["building"]'), timeout, attempts)
     feats = []
     for el in data["elements"]:
         if el["type"] != "way" or not is_closed(el):
@@ -100,8 +100,8 @@ def fetch_buildings(bbox=BBOX):
     return feature_collection(feats)
 
 
-def fetch_roads(bbox=BBOX):
-    data = overpass(ways_query(bbox, '["highway"]'))
+def fetch_roads(bbox=BBOX, timeout=60, attempts=3):
+    data = overpass(ways_query(bbox, '["highway"]'), timeout, attempts)
     feats = []
     for el in data["elements"]:
         if el["type"] != "way":
@@ -114,8 +114,8 @@ def fetch_roads(bbox=BBOX):
     return feature_collection(feats)
 
 
-def fetch_railway(bbox=BBOX):
-    data = overpass(ways_query(bbox, '["railway"="rail"]'))
+def fetch_railway(bbox=BBOX, timeout=60, attempts=3):
+    data = overpass(ways_query(bbox, '["railway"="rail"]'), timeout, attempts)
     feats = []
     for el in data["elements"]:
         if el["type"] != "way":
@@ -128,7 +128,7 @@ def fetch_railway(bbox=BBOX):
     return feature_collection(feats)
 
 
-def fetch_waterway(bbox=BBOX):
+def fetch_waterway(bbox=BBOX, timeout=60, attempts=3):
     s, w, n, e = bbox
     q = f"""
     [out:json][timeout:60];
@@ -138,7 +138,7 @@ def fetch_waterway(bbox=BBOX):
     );
     out geom;
     """
-    data = overpass(q)
+    data = overpass(q, timeout, attempts)
     feats = []
     for el in data["elements"]:
         if el["type"] != "way":
@@ -149,7 +149,7 @@ def fetch_waterway(bbox=BBOX):
     return feature_collection(feats)
 
 
-def fetch_government(bbox=BBOX):
+def fetch_government(bbox=BBOX, timeout=60, attempts=3):
     s, w, n, e = bbox
     q = f"""
     [out:json][timeout:60];
@@ -159,7 +159,7 @@ def fetch_government(bbox=BBOX):
     );
     out geom;
     """
-    data = overpass(q)
+    data = overpass(q, timeout, attempts)
     feats = []
     for el in data["elements"]:
         tags = el.get("tags", {})
@@ -173,7 +173,7 @@ def fetch_government(bbox=BBOX):
     return feature_collection(feats)
 
 
-def fetch_landuse(bbox=BBOX):
+def fetch_landuse(bbox=BBOX, timeout=60, attempts=3):
     s, w, n, e = bbox
     q = f"""
     [out:json][timeout:60];
@@ -183,7 +183,7 @@ def fetch_landuse(bbox=BBOX):
     );
     out geom;
     """
-    data = overpass(q)
+    data = overpass(q, timeout, attempts)
     feats = []
     for el in data["elements"]:
         if el["type"] != "way" or not is_closed(el):
@@ -197,21 +197,31 @@ def fetch_landuse(bbox=BBOX):
     return feature_collection(feats)
 
 
-def fetch_all(bbox):
+def fetch_all(bbox, timeout=12, attempts=2):
     """Fetch every reference layer for an arbitrary bbox in one call -- used
     by the upload feature to get real roads/rail/water/government/landuse for
-    wherever the user says their footage was captured. Any layer that fails
-    (Overpass is a shared, sometimes-flaky public service) comes back empty
-    rather than failing the whole request -- an upload with no rail nearby is
-    normal; an upload that 500s because a mirror timed out is not."""
-    out = {}
-    for name, fn in (("buildings", fetch_buildings), ("roads", fetch_roads), ("railway", fetch_railway),
-                      ("waterway", fetch_waterway), ("government", fetch_government), ("landuse", fetch_landuse)):
+    wherever the user says their footage was captured.
+
+    Runs all six queries concurrently (they're independent HTTP calls) and
+    uses a short timeout/attempt budget by default -- the demo pipeline can
+    afford to patiently retry for minutes since it runs offline ahead of
+    time, but an interactive upload can't leave someone staring at a spinner
+    that long. Any layer that still fails comes back empty rather than
+    failing the whole request -- an upload with no rail nearby is normal; one
+    that 500s because a mirror was slow is not."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    fetchers = {"buildings": fetch_buildings, "roads": fetch_roads, "railway": fetch_railway,
+                "waterway": fetch_waterway, "government": fetch_government, "landuse": fetch_landuse}
+
+    def run(name):
         try:
-            out[name] = fn(bbox)
+            return name, fetchers[name](bbox, timeout, attempts)
         except Exception:
-            out[name] = feature_collection([])
-    return out
+            return name, feature_collection([])
+
+    with ThreadPoolExecutor(max_workers=len(fetchers)) as pool:
+        return dict(pool.map(run, fetchers))
 
 
 def main():

@@ -3,4 +3,6 @@ __pycache__/
 .venv/
 venv/
 data/raw/tiles/
+data/raw/uploads/
+data/uploads/
 .DS_Store
