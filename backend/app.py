@@ -19,18 +19,9 @@ app = Flask(__name__, static_folder=None)
 
 
 @app.route("/")
-def index():
-    return send_from_directory(FRONTEND_DIR, "index.html")
-
-
-@app.route("/vendor/<path:filename>")
-def vendor(filename):
-    return send_from_directory(FRONTEND_DIR / "vendor", filename)
-
-
-@app.route("/data/<path:filename>")
-def data_files(filename):
-    return send_from_directory(FRONTEND_DIR / "data", filename)
+@app.route("/<path:filename>")
+def serve(filename="index.html"):
+    return send_from_directory(FRONTEND_DIR, filename)
 
 
 if __name__ == "__main__":
