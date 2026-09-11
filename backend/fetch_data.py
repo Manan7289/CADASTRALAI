@@ -169,6 +169,30 @@ def fetch_government():
     return feature_collection(feats)
 
 
+def fetch_landuse():
+    s, w, n, e = BBOX
+    q = f"""
+    [out:json][timeout:60];
+    (
+      way["landuse"]({s},{w},{n},{e});
+      way["natural"~"wood|scrub|grassland"]({s},{w},{n},{e});
+    );
+    out geom;
+    """
+    data = overpass(q)
+    feats = []
+    for el in data["elements"]:
+        if el["type"] != "way" or not is_closed(el):
+            continue
+        tags = el.get("tags", {})
+        feats.append({
+            "type": "Feature",
+            "properties": {"id": el["id"], "landuse": tags.get("landuse"), "natural": tags.get("natural")},
+            "geometry": way_to_polygon(el),
+        })
+    return feature_collection(feats)
+
+
 def main():
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     PROC_DIR.mkdir(parents=True, exist_ok=True)
@@ -179,6 +203,7 @@ def main():
         "railway": fetch_railway,
         "waterway": fetch_waterway,
         "government": fetch_government,
+        "landuse": fetch_landuse,
     }
 
     meta = {"bbox": {"south": BBOX[0], "west": BBOX[1], "north": BBOX[2], "east": BBOX[3]}, "source": "OpenStreetMap (ODbL), fetched live via Overpass API", "area": "Igatpuri, Maharashtra, India"}

@@ -16,6 +16,7 @@ import json
 import shutil
 from pathlib import Path
 
+import parcels
 import rules
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -52,6 +53,9 @@ def build_report(building_id, area_m2, alerts):
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    print("Delineating land parcels...")
+    parcels.main()
+
     print("Running rule engine...")
     rule_results = {r["id"]: r for r in rules.evaluate_all()}
 
@@ -72,7 +76,8 @@ def main():
     shutil.copy(PROC_DIR / "buildings.geojson", OUT_DIR / "osm_buildings.geojson")
     shutil.copy(PROC_DIR / "model_metrics.json", OUT_DIR / "metrics.json")
     shutil.copy(PROC_DIR / "aoi_image.png", OUT_DIR / "image.png")
-    print("  copied osm_buildings.geojson, metrics.json, image.png")
+    shutil.copy(PROC_DIR / "parcels.geojson", OUT_DIR / "parcels.geojson")
+    print("  copied osm_buildings.geojson, metrics.json, image.png, parcels.geojson")
 
     layers = {
         "roads": json.loads((PROC_DIR / "roads.geojson").read_text(encoding="utf-8")),

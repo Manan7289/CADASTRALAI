@@ -2,348 +2,187 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>CadastraAI — Live Pipeline</title>
+<title>CadastraAI — Cadastral Map</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="/vendor/leaflet.css">
-<style>
-  :root{
-    --bg:#0D1310; --bg-elevated:#121A15; --surface:#17201C; --surface-2:#1E2924;
-    --border:#28352E; --border-soft:#1E2925; --text:#E7EEE9; --text-dim:#9FB3A8; --text-faint:#66796F;
-    --accent:#45C7B8; --accent-soft:rgba(69,199,184,0.14);
-    --ok:#6CBE81; --warning:#E0A94A; --critical:#E2685F; --change:#B694DA;
-    --font-display:'Big Shoulders','Arial Narrow',sans-serif;
-    --font-body:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
-    --font-mono:'IBM Plex Mono','Consolas',monospace;
-  }
-  *{box-sizing:border-box;}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--font-body);}
-  button{font-family:inherit;}
-  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
-
-  .app{display:flex;flex-direction:column;height:100vh;}
-  .topbar{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:10px 20px;background:var(--bg-elevated);border-bottom:1px solid var(--border);z-index:1000;position:relative;}
-  .brand{display:flex;flex-direction:column;gap:2px;margin-right:auto;}
-  .brand .wordmark{font-family:var(--font-display);font-weight:900;font-size:1.5rem;letter-spacing:0.02em;text-transform:uppercase;line-height:1;}
-  .brand .wordmark span{color:var(--accent);}
-  .brand .subtitle{font-family:var(--font-mono);font-size:0.66rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint);}
-
-  .segmented{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:7px;overflow:hidden;}
-  .segmented button{padding:8px 14px;background:transparent;border:none;color:var(--text-dim);font-family:var(--font-mono);font-size:0.72rem;letter-spacing:0.05em;cursor:pointer;}
-  .segmented button.active{background:var(--accent);color:#04211D;font-weight:600;}
-  .segmented button:not(.active):hover{background:var(--surface-2);color:var(--text);}
-  .toggle-field{display:flex;align-items:center;gap:7px;font-size:0.78rem;color:var(--text-dim);}
-  .toggle-field input{accent-color:var(--accent);width:15px;height:15px;}
-  .status-chip{display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:0.64rem;letter-spacing:0.05em;text-transform:uppercase;color:var(--ok);border:1px solid rgba(108,190,129,0.4);background:rgba(108,190,129,0.08);padding:6px 10px;border-radius:20px;white-space:nowrap;}
-  .status-chip::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--ok);}
-
-  .workspace{flex:1;display:grid;grid-template-columns:1fr 380px;min-height:0;}
-  @media (max-width:880px){.workspace{grid-template-columns:1fr;grid-template-rows:52vh 1fr;}}
-  .map-panel{position:relative;background:#0a0f0c;}
-  #map{width:100%;height:100%;background:#0a0f0c;}
-  .inspector{border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:20px;}
-  @media (max-width:880px){.inspector{border-left:none;border-top:1px solid var(--border);}}
-
-  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-  .stat-tile{background:var(--surface-2);border:1px solid var(--border-soft);border-radius:8px;padding:10px 12px;}
-  .stat-tile .num{font-family:var(--font-mono);font-size:1.3rem;font-weight:500;font-variant-numeric:tabular-nums;}
-  .stat-tile .lbl{font-size:0.63rem;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint);margin-top:2px;}
-
-  .panel-title{font-family:var(--font-display);font-weight:700;font-size:1rem;letter-spacing:0.01em;text-transform:uppercase;margin:0 0 10px 0;display:flex;align-items:center;justify-content:space-between;}
-  .panel-title .back{font-family:var(--font-mono);font-size:0.7rem;color:var(--accent);cursor:pointer;text-transform:none;}
-
-  .queue-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;border:1px solid transparent;}
-  .queue-row:hover{background:var(--surface-2);border-color:var(--border-soft);}
-  .queue-row .id{font-family:var(--font-mono);font-size:0.78rem;width:56px;flex:none;}
-  .queue-row .dots{display:flex;gap:4px;flex:none;}
-  .queue-row .dot{width:8px;height:8px;border-radius:50%;}
-  .queue-row .area{margin-left:auto;font-family:var(--font-mono);font-size:0.72rem;color:var(--text-faint);}
-
-  .legend-row{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:0.78rem;color:var(--text-dim);}
-  .legend-row svg{flex:none;}
-  .legend-row b{color:var(--text);display:block;font-size:0.78rem;}
-  .legend-row small{color:var(--text-faint);font-size:0.68rem;}
-
-  .detail-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
-  .detail-head h2{font-family:var(--font-display);font-weight:900;font-size:1.5rem;margin:0;}
-  .kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;}
-  .kv{background:var(--surface-2);border:1px solid var(--border-soft);border-radius:8px;padding:9px 11px;}
-  .kv .k{font-size:0.63rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-faint);}
-  .kv .v{font-family:var(--font-mono);font-size:0.9rem;margin-top:2px;}
-
-  .findings{display:flex;flex-direction:column;gap:8px;margin-top:14px;}
-  .finding{border-left:3px solid var(--border);background:var(--surface-2);border-radius:0 8px 8px 0;padding:10px 12px;display:flex;gap:10px;align-items:flex-start;}
-  .finding svg{flex:none;margin-top:2px;}
-  .finding b{display:block;font-size:0.82rem;margin-bottom:2px;}
-  .finding p{margin:0;font-size:0.76rem;line-height:1.45;color:var(--text-dim);}
-  .finding .cite{font-family:var(--font-mono);font-size:0.65rem;color:var(--text-faint);margin-top:4px;}
-  .finding.sev-critical{border-color:var(--critical);}
-  .finding.sev-warning{border-color:var(--warning);}
-  .finding.sev-change{border-color:var(--change);}
-
-  .clean-msg{margin-top:14px;padding:12px 13px;border-radius:8px;border:1px solid rgba(108,190,129,0.35);background:rgba(108,190,129,0.08);color:var(--ok);font-size:0.82rem;}
-  .report-btn{margin-top:16px;width:100%;padding:11px;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);font-size:0.82rem;font-weight:600;cursor:pointer;}
-  .report-btn:hover{background:rgba(69,199,184,0.24);}
-  .report-box{margin-top:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);padding:14px;display:none;}
-  .report-box.open{display:block;}
-  .report-box .stamp{display:inline-block;font-family:var(--font-mono);font-size:0.6rem;color:var(--warning);border:1px dashed rgba(224,169,74,0.5);padding:2px 7px;border-radius:4px;margin-bottom:10px;}
-  .report-box pre{margin:0;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.73rem;line-height:1.6;color:var(--text-dim);}
-
-  .loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg);color:var(--text-dim);font-family:var(--font-mono);font-size:0.85rem;z-index:2000;flex-direction:column;gap:10px;text-align:center;padding:20px;}
-  .leaflet-container{background:#0a0f0c;font-family:var(--font-body);}
-</style>
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
 <div class="app">
   <header class="topbar">
     <div class="brand">
       <div class="wordmark">CADASTRA<span>AI</span></div>
-      <div class="subtitle">Real Pipeline · Igatpuri, Maharashtra · OSM + CPU-Trained Model · Team ELAVI</div>
+      <div class="subtitle">Cadastral Map · Igatpuri, Maharashtra · Team ELAVI</div>
     </div>
-    <div class="segmented" id="layerToggle">
-      <button data-layer="model" class="active">AI-EXTRACTED</button>
-      <button data-layer="osm">OFFICIAL (OSM)</button>
-    </div>
+    <nav class="segmented">
+      <a href="index.html" class="active">CADASTRAL MAP</a>
+      <a href="detection.html">COMPLIANCE &amp; DETECTION</a>
+    </nav>
     <label class="toggle-field"><input type="checkbox" id="bufferToggle" checked> Buffer zones</label>
-    <div class="status-chip" id="statusChip">Live model output</div>
+    <div class="status-chip" id="statusChip" style="color:var(--warning);border-color:rgba(224,169,74,0.4);background:rgba(224,169,74,0.08);"><span style="width:6px;height:6px;border-radius:50%;background:var(--warning);"></span>Inferred parcels — for verification</div>
   </header>
 
   <main class="workspace">
     <div class="map-panel">
       <div id="map"></div>
-      <div class="loading" id="loadingScreen">Loading real AOI data, satellite mosaic and model output…</div>
+      <div class="loading" id="loadingScreen">Loading real AOI data and delineating parcels…</div>
     </div>
     <aside class="inspector" id="inspector"></aside>
   </main>
 </div>
 
 <script src="/vendor/leaflet.js"></script>
+<script src="shared.js"></script>
 <script>
 (function(){
 "use strict";
 
-var ALERT_META = {
-  RAIL_BUFFER:  {label:'Rail Safety Buffer', shape:'triangle', sev:'critical'},
-  WATER_BUFFER: {label:'Water Buffer Zone',   shape:'diamond',  sev:'critical'},
-  GOVT_ENCROACH:{label:'Government Land Encroachment', shape:'hexagon', sev:'critical'},
-  NO_ROAD:      {label:'No Direct Road Access', shape:'square', sev:'warning'},
-  UNRECORDED:   {label:'Unrecorded Structure', shape:'circle', sev:'change'}
-};
-var SEV_COLOR = {critical:'#E2685F', warning:'#E0A94A', change:'#B694DA', ok:'#6CBE81'};
-
-function shapePath(shape, cx, cy, r){
-  switch(shape){
-    case 'triangle': return 'M '+cx+' '+(cy-r)+' L '+(cx+r*0.95)+' '+(cy+r*0.8)+' L '+(cx-r*0.95)+' '+(cy+r*0.8)+' Z';
-    case 'diamond':  return 'M '+cx+' '+(cy-r)+' L '+(cx+r)+' '+cy+' L '+cx+' '+(cy+r)+' L '+(cx-r)+' '+cy+' Z';
-    case 'square':   return 'M '+(cx-r*0.85)+' '+(cy-r*0.85)+' h '+(r*1.7)+' v '+(r*1.7)+' h '+(-r*1.7)+' Z';
-    case 'hexagon':
-      var pts=[]; for(var i=0;i<6;i++){var a=Math.PI/6+i*Math.PI/3; pts.push((cx+r*Math.cos(a))+' '+(cy+r*Math.sin(a)));}
-      return 'M '+pts.join(' L ')+' Z';
-    default: return '';
-  }
-}
-function iconSvg(shape, sev, size){
-  size = size||16;
-  var r = size/2-1.5, cx=size/2, cy=size/2, col=SEV_COLOR[sev];
-  if(shape==='circle'){
-    return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'"><circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+col+'" stroke-width="2"/><path d="M '+cx+' '+(cy+r*0.5)+' L '+cx+' '+(cy-r*0.5)+' M '+(cx-r*0.35)+' '+(cy-r*0.1)+' L '+cx+' '+(cy-r*0.5)+' L '+(cx+r*0.35)+' '+(cy-r*0.1)+'" fill="none" stroke="'+col+'" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  }
-  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'"><path d="'+shapePath(shape,cx,cy,r)+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"/></svg>';
-}
-
-var map = L.map('map', {zoomControl:true, attributionControl:true, minZoom:10, maxZoom:22, zoomSnap:0, zoomDelta:0.5});
-var state = {source:'model', showBuffers:true, selectedId:null, modelFc:null, osmFc:null, layersData:null, metrics:null, reports:null};
-var geoLayer, refLayerGroup;
+var map = initMap();
+var state = {selectedParcelId:null, parcelsFc:null, buildingsFc:null};
+var parcelLayer;
 
 Promise.all([
   fetch('data/meta.json').then(r=>r.json()),
   fetch('data/image.png').then(r=>r.blob()),
   fetch('data/layers.json').then(r=>r.json()),
-  fetch('data/buildings.geojson').then(r=>r.json()),
-  fetch('data/osm_buildings.geojson').then(r=>r.json()),
-  fetch('data/metrics.json').then(r=>r.json()),
-  fetch('data/reports.json').then(r=>r.json())
+  fetch('data/parcels.geojson').then(r=>r.json()),
+  fetch('data/buildings.geojson').then(r=>r.json())
 ]).then(function(res){
-  var meta = res[0], imgBlob = res[1], layers = res[2], modelFc = res[3], osmFc = res[4], metrics = res[5], reports = res[6];
-  var geo = meta.image;
-  var bounds = [[geo.lat_se, geo.lon_nw],[geo.lat_nw, geo.lon_se]];
+  var meta = res[0], imgBlob = res[1], layers = res[2], parcelsFc = res[3], buildingsFc = res[4];
 
-  var imgUrl = URL.createObjectURL(imgBlob);
-  L.imageOverlay(imgUrl, bounds, {attribution:'Esri World Imagery (stitched offline mosaic)'}).addTo(map);
-  map.invalidateSize();
-  map.fitBounds(bounds);
-  window.addEventListener('resize', function(){ map.invalidateSize(); });
-
-  var osmTiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; OpenStreetMap contributors'});
-  L.control.layers({'Offline satellite mosaic': L.layerGroup(), 'Live OSM tiles (needs internet)': osmTiles}, null, {position:'bottomleft'}).addTo(map);
-
-  refLayerGroup = L.layerGroup().addTo(map);
-  function addRef(fc, color, weight, dash){
-    L.geoJSON(fc, {style:{color:color, weight:weight, dashArray:dash, fillOpacity:0.12}}).addTo(refLayerGroup);
-  }
-  addRef(layers.roads, '#4E5C52', 2, null);
-  addRef(layers.railway, '#8A7A5A', 3, '1 4');
-  addRef(layers.waterway, '#3E7A98', 2, null);
-  L.geoJSON(layers.government, {
-    style:{color:'#E0A94A', weight:1.5, fillOpacity:0.18, fillColor:'#E0A94A'},
-    pointToLayer:function(f, latlng){ return L.circleMarker(latlng, {radius:6, color:'#E0A94A', fillColor:'#E0A94A', fillOpacity:0.6}); }
-  }).addTo(refLayerGroup);
-
-  // buffer zones (drawn from real geometry, buffered client-side is complex without turf,
-  // so we approximate visually with a fixed-width halo along rail/water using thick translucent lines)
-  var bufferGroup = L.layerGroup().addTo(map);
-  L.geoJSON(layers.railway, {style:{color:'#E2685F', weight:26, opacity:0.10}}).addTo(bufferGroup);
-  L.geoJSON(layers.waterway, {style:{color:'#E2685F', weight:14, opacity:0.10}}).addTo(bufferGroup);
-
-  state.layersData = layers;
-  state.modelFc = modelFc;
-  state.osmFc = osmFc;
-  state.metrics = metrics;
-  state.reports = reports;
-
+  var refs = loadBaseLayers(map, meta, imgBlob, layers);
   document.getElementById('bufferToggle').addEventListener('change', function(e){
-    if(e.target.checked) map.addLayer(bufferGroup); else map.removeLayer(bufferGroup);
+    if(e.target.checked) map.addLayer(refs.bufferGroup); else map.removeLayer(refs.bufferGroup);
   });
 
-  renderBuildings();
+  state.parcelsFc = parcelsFc;
+  state.buildingsFc = buildingsFc;
+
+  // buildings shown only as neutral context inside parcels -- not interactive here;
+  // structure-level compliance detail lives on the Compliance & Detection page.
+  L.geoJSON(buildingsFc, {
+    interactive:false,
+    style:{color:'#C9CDC4', weight:0.6, fillColor:'#C9CDC4', fillOpacity:0.5}
+  }).addTo(map);
+
+  renderParcels();
   renderSidebar();
   document.getElementById('loadingScreen').style.display = 'none';
 }).catch(function(err){
-  document.getElementById('loadingScreen').textContent = 'Failed to load: ' + err + '  (did you run fetch_data.py, fetch_imagery.py and model.py first?)';
+  document.getElementById('loadingScreen').textContent = 'Failed to load: ' + err + '  (did you run the backend pipeline through build_static.py first?)';
 });
 
-function currentFc(){ return state.source==='model' ? state.modelFc : state.osmFc; }
-
-function severityOf(props){
-  var alerts = props.alerts || [];
-  if(alerts.some(a=>ALERT_META[a.type].sev==='critical')) return 'critical';
-  if(alerts.some(a=>ALERT_META[a.type].sev==='warning')) return 'warning';
-  if(alerts.some(a=>ALERT_META[a.type].sev==='change')) return 'change';
-  return 'ok';
-}
-
-function renderBuildings(){
-  if(geoLayer) map.removeLayer(geoLayer);
-  var fc = currentFc();
-  geoLayer = L.geoJSON(fc, {
+function renderParcels(){
+  if(parcelLayer) map.removeLayer(parcelLayer);
+  parcelLayer = L.geoJSON(state.parcelsFc, {
     style:function(f){
-      var sev = state.source==='model' ? severityOf(f.properties) : 'ok';
-      var selected = state.source==='model' && f.properties.id===state.selectedId;
+      var selected = f.properties.id===state.selectedParcelId;
       return {
-        color: selected ? '#45C7B8' : (sev==='ok' ? '#C9CDC4' : SEV_COLOR[sev]),
-        weight: selected ? 2.6 : (sev==='ok' ? 0.8 : 1.6),
-        fillColor: '#C9CDC4', fillOpacity: 0.55
+        color: selected ? '#45C7B8' : '#F2E9DC',
+        weight: selected ? 3 : 1.6,
+        opacity: selected ? 1 : 0.85,
+        dashArray: selected ? null : '5 4',
+        fillColor: LANDUSE_COLOR[f.properties.landuse] || '#5C6B63',
+        fillOpacity: 0.42
       };
     },
     onEachFeature:function(f, layer){
-      if(state.source==='model'){
-        layer.on('click', function(){ state.selectedId = f.properties.id; renderBuildings(); renderSidebar(); });
-      }
+      layer.on('click', function(){
+        state.selectedParcelId = f.properties.id;
+        renderParcels(); renderSidebar();
+      });
     }
   }).addTo(map);
 }
 
 var inspector = document.getElementById('inspector');
 
-function statCounts(){
-  var feats = state.modelFc.features;
-  var flagged = feats.filter(f => (f.properties.alerts||[]).length>0).length;
-  return {total: feats.length, flagged: flagged};
-}
-
 function renderSidebar(){
-  if(state.selectedId!=null){ renderDetail(); return; }
+  if(state.selectedParcelId!=null){ renderParcelDetail(); return; }
 
-  var counts = statCounts();
-  var m = state.metrics;
+  var parcels = state.parcelsFc.features;
+  var landlocked = parcels.filter(f => !f.properties.road_connected);
+  var unrecordedParcels = parcels.filter(f => f.properties.has_unrecorded_building);
+  var landuseMix = {};
+  parcels.forEach(function(f){ landuseMix[f.properties.landuse] = (landuseMix[f.properties.landuse]||0)+1; });
+
   var html = '';
-  html += '<div><h3 class="panel-title">Model Performance (real, cross-validated)</h3>'+
-    '<div class="stat-grid">'+
-      '<div class="stat-tile"><div class="num" style="color:'+ (m.cv_building_recall_mean>=0.5?'var(--ok)':'var(--warning)') +'">'+Math.round(m.cv_building_recall_mean*100)+'%</div><div class="lbl">Held-out buildings found</div></div>'+
-      '<div class="stat-tile"><div class="num">'+m.cv_roc_auc_mean.toFixed(2)+'</div><div class="lbl">ROC-AUC (held-out)</div></div>'+
-      '<div class="stat-tile"><div class="num">'+Math.round(m.precision_in_verified_area*100)+'%</div><div class="lbl">Precision (verified area)</div></div>'+
-      '<div class="stat-tile"><div class="num">'+m.train_seconds+'s</div><div class="lbl">CPU train time</div></div>'+
-    '</div><div style="font-size:0.72rem;color:var(--text-faint);margin-top:8px;line-height:1.5;">RandomForest trained live on this machine (no GPU, no pretrained checkpoint) on OSM footprints from a fully-digitised housing colony ('+m.verified_colony_buildings+' buildings); recall and AUC are averaged over 5 random train/test splits, evaluated only on buildings held out of training. Applied to the full '+m.total_osm_buildings_in_aoi+'-building AOI for the map below.</div></div>';
-
   html += '<div><h3 class="panel-title">Ward Overview</h3><div class="stat-grid">'+
-    '<div class="stat-tile"><div class="num">'+counts.total+'</div><div class="lbl">Footprints extracted</div></div>'+
-    '<div class="stat-tile"><div class="num" style="color:'+(counts.flagged?'var(--warning)':'var(--ok)')+'">'+counts.flagged+'</div><div class="lbl">Flagged by rule engine</div></div>'+
+    '<div class="stat-tile"><div class="num">'+parcels.length+'</div><div class="lbl">Land parcels mapped</div></div>'+
+    '<div class="stat-tile"><div class="num">'+state.buildingsFc.features.length+'</div><div class="lbl">Buildings inside them</div></div>'+
+    '<div class="stat-tile"><div class="num" style="color:'+(landlocked.length?'var(--warning)':'var(--ok)')+'">'+landlocked.length+'</div><div class="lbl">No road frontage</div></div>'+
+    '<div class="stat-tile"><div class="num" style="color:'+(unrecordedParcels.length?'var(--change)':'var(--ok)')+'">'+unrecordedParcels.length+'</div><div class="lbl">Hold unrecorded structures</div></div>'+
   '</div></div>';
 
-  var priority = state.modelFc.features.slice().sort(function(a,b){
-    return (b.properties.alerts||[]).length - (a.properties.alerts||[]).length;
-  }).slice(0,8);
-  html += '<div><h3 class="panel-title">Field Verification Queue</h3>';
+  var priority = landlocked.concat(unrecordedParcels.filter(f => landlocked.indexOf(f)===-1)).slice(0,8);
+  if(priority.length===0){ priority = parcels.slice(0,8); }
+  html += '<div><h3 class="panel-title">Parcels To Verify</h3>';
   priority.forEach(function(f){
-    var al = f.properties.alerts||[];
-    var dots = al.map(a=>'<span class="dot" style="background:'+SEV_COLOR[ALERT_META[a.type].sev]+'"></span>').join('');
-    html += '<div class="queue-row" data-id="'+f.properties.id+'"><span class="id">#'+f.properties.id+'</span><span class="dots">'+dots+'</span><span class="area">'+(f.properties.area_m2||0)+' m²</span></div>';
+    var p = f.properties;
+    var flags = [];
+    if(!p.road_connected) flags.push('<span class="dot" style="background:var(--warning);"></span>');
+    if(p.has_unrecorded_building) flags.push('<span class="dot" style="background:var(--change);"></span>');
+    html += '<div class="queue-row" data-id="'+p.id+'"><span class="id">#'+p.id+'</span><span class="dots">'+flags.join('')+'</span><span class="area">'+p.area_m2+' m²</span></div>';
   });
   html += '</div>';
 
-  html += '<div><h3 class="panel-title">Key / Legend</h3>';
-  Object.keys(ALERT_META).forEach(function(k){
-    var mm = ALERT_META[k];
-    html += '<div class="legend-row">'+iconSvg(mm.shape,mm.sev,18)+'<div><b>'+mm.label+'</b></div></div>';
+  html += '<div><h3 class="panel-title">Land-Use Mix</h3>';
+  Object.keys(LANDUSE_COLOR).forEach(function(k){
+    if(!landuseMix[k]) return;
+    html += '<div class="legend-row"><span style="width:16px;height:16px;border-radius:3px;background:'+LANDUSE_COLOR[k]+';opacity:0.55;flex:none;"></span><div><b>'+k+'</b><small>'+landuseMix[k]+' parcels</small></div></div>';
   });
-  html += '</div>';
+  html += '<div style="font-size:0.68rem;color:var(--text-faint);margin-top:8px;line-height:1.5;">Parcel boundaries are inferred — a Voronoi tessellation around each real building position, clipped by the real road/rail/water network — since land-ownership records aren\'t public data. Treat this as a candidate layer for field verification, not a surveyed cadastral record.</div></div>';
 
   inspector.innerHTML = html;
   inspector.querySelectorAll('.queue-row').forEach(function(row){
     row.addEventListener('click', function(){
-      state.selectedId = parseInt(row.getAttribute('data-id'),10);
-      renderBuildings(); renderSidebar();
+      state.selectedParcelId = parseInt(row.getAttribute('data-id'),10);
+      renderParcels(); renderSidebar();
     });
   });
 }
 
-function renderDetail(){
-  var f = state.modelFc.features.find(x=>x.properties.id===state.selectedId);
-  if(!f){ state.selectedId=null; renderSidebar(); return; }
+function renderParcelDetail(){
+  var f = state.parcelsFc.features.find(x=>x.properties.id===state.selectedParcelId);
+  if(!f){ state.selectedParcelId=null; renderSidebar(); return; }
   var p = f.properties;
-  var alerts = p.alerts || [];
+  var luColor = LANDUSE_COLOR[p.landuse] || '#5C6B63';
 
-  var html = '<div><h3 class="panel-title"><span class="back" id="backBtn">&larr; Overview</span></h3>';
-  html += '<div class="detail-head"><h2>Footprint #'+p.id+'</h2>'+(p.unrecorded?'<span style="color:var(--change);font-family:var(--font-mono);font-size:0.7rem;">UNRECORDED</span>':'')+'</div>';
-  html += '<div class="kv-grid"><div class="kv"><div class="k">Area</div><div class="v">'+(p.area_m2||0)+' m²</div></div>'+
-    '<div class="kv"><div class="k">Alerts</div><div class="v">'+alerts.length+'</div></div></div>';
+  var html = '<div><h3 class="panel-title"><span class="back" id="backBtnP">&larr; Overview</span></h3>';
+  html += '<div class="detail-head"><h2>Parcel #'+p.id+'</h2><span style="color:'+luColor+';font-family:var(--font-mono);font-size:0.7rem;text-transform:uppercase;">'+p.landuse+'</span></div>';
+  html += '<div class="kv-grid">'+
+    '<div class="kv"><div class="k">Area</div><div class="v">'+p.area_m2+' m²</div></div>'+
+    '<div class="kv"><div class="k">Perimeter</div><div class="v">'+p.perimeter_m+' m</div></div>'+
+    '<div class="kv"><div class="k">Buildings inside</div><div class="v">'+p.building_count+'</div></div>'+
+    '<div class="kv"><div class="k">Road access</div><div class="v" style="color:'+(p.road_connected?'var(--ok)':'var(--critical)')+'">'+(p.road_connected?'Connected':'~'+p.road_distance_m+' m away')+'</div></div>'+
+    '<div class="kv" style="grid-column:1/-1;"><div class="k">GPS centroid (approx.)</div><div class="v">'+p.gps_lat.toFixed(5)+'° N, '+p.gps_lon.toFixed(5)+'° E</div></div>'+
+  '</div>';
 
-  if(alerts.length){
+  var findings = [];
+  if(!p.road_connected){
+    findings.push({sev:'warning', shape:'square', label:'No Road Frontage', msg:'Nearest mapped road is ~'+p.road_distance_m+' m away. Relative to the mapped OSM road network (itself incomplete here) — review access in the field.'});
+  }
+  if(p.has_unrecorded_building){
+    findings.push({sev:'change', shape:'circle', label:'Contains an Unrecorded Structure', msg:'At least one AI-detected building on this parcel has no match in the official building record. See Compliance & Detection for the specific structure.'});
+  }
+  if(findings.length){
     html += '<div class="findings">';
-    alerts.forEach(function(a){
-      var mm = ALERT_META[a.type];
-      html += '<div class="finding sev-'+mm.sev+'">'+iconSvg(mm.shape,mm.sev,18)+'<div><b>'+mm.label+'</b><p>'+a.msg+'</p><div class="cite">'+a.citation+'</div></div></div>';
+    findings.forEach(function(a){
+      html += '<div class="finding sev-'+a.sev+'">'+iconSvg(a.shape,a.sev,18)+'<div><b>'+a.label+'</b><p>'+a.msg+'</p></div></div>';
     });
     html += '</div>';
   } else {
     html += '<div class="clean-msg">&#10003; No issues detected by the automated rule engine</div>';
   }
 
-  html += '<button class="report-btn" id="reportBtn">Generate Verification Note</button>';
-  html += '<div class="report-box" id="reportBox"><span class="stamp">SYSTEM-GENERATED · SIMULATED WORKFLOW — NOT A LEGAL DOCUMENT</span><pre id="reportText"></pre></div></div>';
+  html += '<div style="margin-top:14px;font-size:0.7rem;color:var(--text-faint);line-height:1.5;">This boundary is inferred from building positions and the surrounding road/rail/water network, not a surveyed record — use it to prioritise which plots to verify on the ground.</div>';
+  html += '</div>';
 
   inspector.innerHTML = html;
-  document.getElementById('backBtn').addEventListener('click', function(){ state.selectedId=null; renderBuildings(); renderSidebar(); });
-  document.getElementById('reportBtn').addEventListener('click', function(){
-    var box = document.getElementById('reportBox');
-    box.classList.toggle('open');
-    if(box.classList.contains('open')){
-      document.getElementById('reportText').textContent = state.reports[String(p.id)] || 'No report available.';
-    }
-  });
+  document.getElementById('backBtnP').addEventListener('click', function(){ state.selectedParcelId=null; renderParcels(); renderSidebar(); });
 }
-
-document.getElementById('layerToggle').addEventListener('click', function(e){
-  var btn = e.target.closest('button[data-layer]');
-  if(!btn) return;
-  document.querySelectorAll('#layerToggle button').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  state.source = btn.getAttribute('data-layer');
-  state.selectedId = null;
-  renderBuildings();
-  renderSidebar();
-});
 
 })();
 </script>
