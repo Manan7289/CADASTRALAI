@@ -33,6 +33,16 @@ function iconSvg(shape, sev, size){
   return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'"><path d="'+shapePath(shape,cx,cy,r)+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"/></svg>';
 }
 
+// If the page was opened as ?session=<id> (from the Upload page), fetch that
+// upload's own generated data instead of the fixed demo bundle under data/.
+function dataUrl(name){
+  var session = new URLSearchParams(location.search).get('session');
+  return session ? 'uploads/' + session + '/' + name : 'data/' + name;
+}
+function currentSessionId(){
+  return new URLSearchParams(location.search).get('session');
+}
+
 function initMap(){
   return L.map('map', {zoomControl:true, attributionControl:true, minZoom:10, maxZoom:22, zoomSnap:0, zoomDelta:0.5});
 }

@@ -19,6 +19,7 @@
     <nav class="segmented">
       <a href="index.html">CADASTRAL MAP</a>
       <a href="detection.html" class="active">COMPLIANCE &amp; DETECTION</a>
+      <a href="upload.html">UPLOAD YOUR OWN</a>
     </nav>
     <div class="segmented" id="layerToggle">
       <button data-layer="model" class="active">AI-EXTRACTED</button>
@@ -48,13 +49,13 @@ var state = {source:'model', selectedId:null, modelFc:null, osmFc:null, metrics:
 var geoLayer;
 
 Promise.all([
-  fetch('data/meta.json').then(r=>r.json()),
-  fetch('data/image.png').then(r=>r.blob()),
-  fetch('data/layers.json').then(r=>r.json()),
-  fetch('data/buildings.geojson').then(r=>r.json()),
-  fetch('data/osm_buildings.geojson').then(r=>r.json()),
-  fetch('data/metrics.json').then(r=>r.json()),
-  fetch('data/reports.json').then(r=>r.json())
+  fetch(dataUrl('meta.json')).then(r=>r.json()),
+  fetch(dataUrl('image.png')).then(r=>r.blob()),
+  fetch(dataUrl('layers.json')).then(r=>r.json()),
+  fetch(dataUrl('buildings.geojson')).then(r=>r.json()),
+  fetch(dataUrl('osm_buildings.geojson')).then(r=>r.json()),
+  fetch(dataUrl('metrics.json')).then(r=>r.json()),
+  fetch(dataUrl('reports.json')).then(r=>r.json())
 ]).then(function(res){
   var meta = res[0], imgBlob = res[1], layers = res[2], modelFc = res[3], osmFc = res[4], metrics = res[5], reports = res[6];
 
@@ -120,13 +121,21 @@ function renderSidebar(){
   var counts = statCounts();
   var m = state.metrics;
   var html = '';
-  html += '<div><h3 class="panel-title">Model Performance (real, cross-validated)</h3>'+
-    '<div class="stat-grid">'+
-      '<div class="stat-tile"><div class="num" style="color:'+ (m.cv_building_recall_mean>=0.5?'var(--ok)':'var(--warning)') +'">'+Math.round(m.cv_building_recall_mean*100)+'%</div><div class="lbl">Held-out buildings found</div></div>'+
-      '<div class="stat-tile"><div class="num">'+m.cv_roc_auc_mean.toFixed(2)+'</div><div class="lbl">ROC-AUC (held-out)</div></div>'+
-      '<div class="stat-tile"><div class="num">'+Math.round(m.precision_in_verified_area*100)+'%</div><div class="lbl">Precision (verified area)</div></div>'+
-      '<div class="stat-tile"><div class="num">'+m.train_seconds+'s</div><div class="lbl">CPU train time</div></div>'+
-    '</div><div style="font-size:0.72rem;color:var(--text-faint);margin-top:8px;line-height:1.5;">RandomForest trained live on this machine (no GPU, no pretrained checkpoint) on OSM footprints from a fully-digitised housing colony ('+m.verified_colony_buildings+' buildings); recall and AUC are averaged over 5 random train/test splits, evaluated only on buildings held out of training. Applied to the full '+m.total_osm_buildings_in_aoi+'-building AOI for the map below.</div></div>';
+  if(m.method === 'unsupervised'){
+    html += '<div><h3 class="panel-title">Detection Method</h3>'+
+      '<div class="stat-grid">'+
+        '<div class="stat-tile"><div class="num">'+m.buildings_detected+'</div><div class="lbl">Structures detected</div></div>'+
+        '<div class="stat-tile"><div class="num">'+m.processing_seconds+'s</div><div class="lbl">Processing time</div></div>'+
+      '</div><div style="font-size:0.72rem;color:var(--warning);margin-top:8px;line-height:1.5;">'+m.note+'</div></div>';
+  } else {
+    html += '<div><h3 class="panel-title">Model Performance (real, cross-validated)</h3>'+
+      '<div class="stat-grid">'+
+        '<div class="stat-tile"><div class="num" style="color:'+ (m.cv_building_recall_mean>=0.5?'var(--ok)':'var(--warning)') +'">'+Math.round(m.cv_building_recall_mean*100)+'%</div><div class="lbl">Held-out buildings found</div></div>'+
+        '<div class="stat-tile"><div class="num">'+m.cv_roc_auc_mean.toFixed(2)+'</div><div class="lbl">ROC-AUC (held-out)</div></div>'+
+        '<div class="stat-tile"><div class="num">'+Math.round(m.precision_in_verified_area*100)+'%</div><div class="lbl">Precision (verified area)</div></div>'+
+        '<div class="stat-tile"><div class="num">'+m.train_seconds+'s</div><div class="lbl">CPU train time</div></div>'+
+      '</div><div style="font-size:0.72rem;color:var(--text-faint);margin-top:8px;line-height:1.5;">RandomForest trained live on this machine (no GPU, no pretrained checkpoint) on OSM footprints from a fully-digitised housing colony ('+m.verified_colony_buildings+' buildings); recall and AUC are averaged over 5 random train/test splits, evaluated only on buildings held out of training. Applied to the full '+m.total_osm_buildings_in_aoi+'-building AOI for the map below.</div></div>';
+  }
 
   html += '<div><h3 class="panel-title">Ward Overview</h3><div class="stat-grid">'+
     '<div class="stat-tile"><div class="num">'+counts.total+'</div><div class="lbl">Footprints extracted</div></div>'+
