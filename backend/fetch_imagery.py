@@ -17,7 +17,7 @@ from PIL import Image
 HEADERS = {"User-Agent": "CadastraAI-SIH2026-Demo/1.0 (educational hackathon project)"}
 TILE_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
 
-BBOX = (19.690, 73.555, 19.705, 73.570)  # south, west, north, east -- must match fetch_data.py
+BBOX = (19.691, 73.5545, 19.701, 73.567)  # south, west, north, east -- must match fetch_data.py
 ZOOM = 17
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"

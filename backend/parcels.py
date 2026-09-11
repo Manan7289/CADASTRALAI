@@ -27,7 +27,12 @@ literature this project's own submission cites uses (Crommelinck et al.):
   4. Whatever land is left over after capping every building's plot in a
      block becomes its own separate vacant/unbuilt parcel (there can be more
      than one per block) -- instead of being silently absorbed into a
-     neighbouring building's "residential" plot.
+     neighbouring building's "residential" plot. If that leftover patch is
+     itself large, it's subdivided into a grid of plot/field-sized parcels
+     (bigger cells over land classified Agricultural/Forest, smaller cells
+     otherwise) rather than left as one big undifferentiated blob -- real
+     cadastral maps subdivide farmland into individual survey plots too, not
+     just built-up land.
 
 Every parcel then gets real attributes: area and perimeter (dimensions),
 land-use (from real OSM landuse tags, or "Residential" if it contains a
@@ -39,11 +44,12 @@ layer for verification, matching this project's "preliminary map, human
 approves" design.
 """
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 from scipy.spatial import Voronoi
-from shapely.geometry import shape, Polygon, mapping, MultiPoint
+from shapely.geometry import shape, Polygon, box, mapping
 from shapely.ops import unary_union
 
 from geo_utils import LocalProjection, load_geojson
@@ -58,6 +64,32 @@ ROAD_CONNECT_M = 200    # same relaxed threshold as rules.py, for the same reaso
 FAR_MULTIPLIER = 50     # how far outside the AOI the Voronoi "mirror" points sit
 PLOT_SETBACK_M = 7      # yard/setback margin added around a building's own footprint to form its plot;
                          # caps how large an inferred residential parcel can get regardless of Voronoi cell size
+FIELD_UNSPLIT_M2 = 4000        # tagged farmland/forest under this size stays a single field parcel
+FIELD_CELL_MIN_M = 35          # smallest field-subdivision cell
+FIELD_CELL_MAX_M = 90          # largest field-subdivision cell
+FIELD_TARGET_CELLS = 10        # aim for roughly this many field parcels per tagged patch
+UNTAGGED_VACANT_CAP_M2 = 20000 # land with NO landuse tag at all is left as one parcel below this size --
+                                # there's no real signal it's several separate plots, so it isn't invented
+UNTAGGED_CELL_M = 90            # only used above the cap, to avoid one absurd single blob
+
+
+def subdivide_grid(poly, cell_size):
+    """Cut a polygon into a regular grid of cell_size x cell_size squares,
+    clipped to the polygon's real shape -- used so a large stretch of open
+    land reads as individual field/plot-sized parcels instead of one blob."""
+    minx, miny, maxx, maxy = poly.bounds
+    pieces = []
+    x = minx
+    while x < maxx:
+        y = miny
+        while y < maxy:
+            piece = box(x, y, x + cell_size, y + cell_size).intersection(poly)
+            if not piece.is_empty:
+                sub_pieces = piece.geoms if piece.geom_type == "MultiPolygon" else [piece]
+                pieces.extend(g for g in sub_pieces if g.area >= MIN_PARCEL_M2)
+            y += cell_size
+        x += cell_size
+    return pieces
 
 
 def _lines(fc):
@@ -139,7 +171,14 @@ def build_parcels():
     water_fc = load_geojson(PROC_DIR / "waterway.geojson")
     govt_fc = load_geojson(PROC_DIR / "government.geojson")
     landuse_fc = load_geojson(PROC_DIR / "landuse.geojson") if (PROC_DIR / "landuse.geojson").exists() else {"features": []}
+    return build_parcels_from_data(aoi_geo, buildings_fc, roads_fc, rail_fc, water_fc, govt_fc, landuse_fc)
 
+
+def build_parcels_from_data(aoi_geo, buildings_fc, roads_fc, rail_fc, water_fc, govt_fc, landuse_fc):
+    """Same delineation build_parcels() does, but from already-loaded data
+    instead of fixed files -- what the upload feature uses for an arbitrary
+    new AOI (its own uploaded image's bounds + whatever OSM layers were
+    live-fetched for it), so the exact same parcel logic runs on it."""
     lon0 = (aoi_geo["lon_nw"] + aoi_geo["lon_se"]) / 2
     lat0 = (aoi_geo["lat_nw"] + aoi_geo["lat_se"]) / 2
     proj = LocalProjection(lon0, lat0)
@@ -211,7 +250,30 @@ def build_parcels():
         leftover = block.difference(claimed) if not claimed.is_empty else block
         if not leftover.is_empty:
             leftover_parts = list(leftover.geoms) if leftover.geom_type == "MultiPolygon" else [leftover]
-            cells_with_members.extend((part, []) for part in leftover_parts)
+            for part in leftover_parts:
+                provisional_landuse = classify_landuse(part, False, landuse_local, govt_union)
+                is_tagged_field = provisional_landuse in ("Agricultural", "Forest / Green Land")
+
+                if is_tagged_field:
+                    # this patch is REAL, OSM-tagged farmland/forest -- subdivide it
+                    # into field-sized parcels, since we have an actual basis for
+                    # treating it as several plots, not one
+                    if part.area <= FIELD_UNSPLIT_M2:
+                        cells_with_members.append((part, []))
+                        continue
+                    cell_size = math.sqrt(part.area / FIELD_TARGET_CELLS)
+                    cell_size = max(FIELD_CELL_MIN_M, min(FIELD_CELL_MAX_M, cell_size))
+                    for sub in subdivide_grid(part, cell_size):
+                        cells_with_members.append((sub, []))
+                elif part.area <= UNTAGGED_VACANT_CAP_M2:
+                    # untagged gap/open land -- no evidence it's several separate
+                    # plots, so it stays one parcel rather than inventing boundaries
+                    cells_with_members.append((part, []))
+                else:
+                    # only an untagged area this large gets split, purely to avoid
+                    # one absurdly oversized parcel -- coarse cells, no plot claim
+                    for sub in subdivide_grid(part, UNTAGGED_CELL_M):
+                        cells_with_members.append((sub, []))
 
         for cell, member_buildings in cells_with_members:
             if cell.is_empty or cell.area < MIN_PARCEL_M2:

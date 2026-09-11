@@ -41,18 +41,15 @@ def _lines_only(fc):
     return [shape(f["geometry"]) for f in fc["features"] if f["geometry"]["type"] == "LineString"]
 
 
-def load_layers():
-    buildings_fc = load_geojson(PROC_DIR / "extracted_buildings.geojson")
-    roads_fc = load_geojson(PROC_DIR / "roads.geojson")
-    rail_fc = load_geojson(PROC_DIR / "railway.geojson")
-    water_fc = load_geojson(PROC_DIR / "waterway.geojson")
-    govt_fc = load_geojson(PROC_DIR / "government.geojson")
-
+def layers_from_geojson(buildings_fc, roads_fc, rail_fc, water_fc, govt_fc):
+    """Same projection/parsing load_layers() does, but from already-loaded
+    GeoJSON dicts instead of fixed files -- what the upload feature uses for
+    an arbitrary new AOI, so the exact same rule engine runs on it."""
     all_coords = []
     for f in buildings_fc["features"]:
         all_coords.extend(f["geometry"]["coordinates"][0])
     if not all_coords:
-        raise RuntimeError("No extracted buildings found -- run model.py first")
+        raise RuntimeError("No buildings to evaluate")
     lon0 = sum(c[0] for c in all_coords) / len(all_coords)
     lat0 = sum(c[1] for c in all_coords) / len(all_coords)
     proj = LocalProjection(lon0, lat0)
@@ -69,8 +66,17 @@ def load_layers():
     }
 
 
-def evaluate_all():
-    layers = load_layers()
+def load_layers():
+    return layers_from_geojson(
+        load_geojson(PROC_DIR / "extracted_buildings.geojson"),
+        load_geojson(PROC_DIR / "roads.geojson"),
+        load_geojson(PROC_DIR / "railway.geojson"),
+        load_geojson(PROC_DIR / "waterway.geojson"),
+        load_geojson(PROC_DIR / "government.geojson"),
+    )
+
+
+def evaluate_layers(layers):
     rail_lines_union = unary_union(layers["rail"]) if layers["rail"] else None
     rail_union = rail_lines_union.buffer(RAIL_BUFFER_M) if rail_lines_union is not None else None
     water_geoms = layers["water_lines"] + layers["water_polys"]
@@ -107,6 +113,10 @@ def evaluate_all():
         results.append({"id": props.get("id"), "alerts": alerts, "area_m2": round(geom.area, 1)})
 
     return results
+
+
+def evaluate_all():
+    return evaluate_layers(load_layers())
 
 
 if __name__ == "__main__":

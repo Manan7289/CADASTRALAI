@@ -1,14 +1,14 @@
 {
   "cv_folds": 5,
-  "cv_building_recall_mean": 0.573,
-  "cv_roc_auc_mean": 0.815,
-  "precision_in_verified_area": 0.667,
-  "verified_colony_buildings": 53,
-  "total_osm_buildings_in_aoi": 131,
-  "predicted_polygons_full_aoi": 131,
-  "unrecorded_candidates_full_aoi": 120,
-  "train_seconds": 5.97,
-  "total_seconds": 7.38,
+  "cv_building_recall_mean": 0.586,
+  "cv_roc_auc_mean": 0.794,
+  "precision_in_verified_area": 0.8,
+  "verified_colony_buildings": 49,
+  "total_osm_buildings_in_aoi": 113,
+  "predicted_polygons_full_aoi": 176,
+  "unrecorded_candidates_full_aoi": 157,
+  "train_seconds": 8.25,
+  "total_seconds": 9.44,
   "resolution_px": [
     900,
     900
