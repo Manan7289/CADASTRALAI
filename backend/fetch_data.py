@@ -20,9 +20,13 @@ OVERPASS_ENDPOINTS = [
 ]
 HEADERS = {"User-Agent": "CadastraAI-SIH2026-Demo/1.0 (educational hackathon project)"}
 
-# Igatpuri, Maharashtra -- real railway town, ~1.5km x 1.6km AOI chosen
-# because it genuinely has buildings + roads + railway + waterway + government land.
-BBOX = (19.690, 73.555, 19.705, 73.570)  # south, west, north, east
+# Igatpuri, Maharashtra -- real railway town. Tightened from the original
+# 1.5km x 1.6km box to ~1.1km x 1.4km, cutting the mostly-empty hillside/lake
+# area to the north (which was producing oversized "vacant land" parcels)
+# while keeping 112 of the original 131 buildings, 46/49 roads and the
+# full railway corridor -- a smaller, denser AOI that better demonstrates
+# individual-parcel resolution.
+BBOX = (19.691, 73.5545, 19.701, 73.567)  # south, west, north, east
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 RAW_DIR = DATA_DIR / "raw"
@@ -82,8 +86,8 @@ def feature_collection(features):
     return {"type": "FeatureCollection", "features": features}
 
 
-def fetch_buildings():
-    data = overpass(ways_query(BBOX, '["building"]'))
+def fetch_buildings(bbox=BBOX):
+    data = overpass(ways_query(bbox, '["building"]'))
     feats = []
     for el in data["elements"]:
         if el["type"] != "way" or not is_closed(el):
@@ -96,8 +100,8 @@ def fetch_buildings():
     return feature_collection(feats)
 
 
-def fetch_roads():
-    data = overpass(ways_query(BBOX, '["highway"]'))
+def fetch_roads(bbox=BBOX):
+    data = overpass(ways_query(bbox, '["highway"]'))
     feats = []
     for el in data["elements"]:
         if el["type"] != "way":
@@ -110,8 +114,8 @@ def fetch_roads():
     return feature_collection(feats)
 
 
-def fetch_railway():
-    data = overpass(ways_query(BBOX, '["railway"="rail"]'))
+def fetch_railway(bbox=BBOX):
+    data = overpass(ways_query(bbox, '["railway"="rail"]'))
     feats = []
     for el in data["elements"]:
         if el["type"] != "way":
@@ -124,8 +128,8 @@ def fetch_railway():
     return feature_collection(feats)
 
 
-def fetch_waterway():
-    s, w, n, e = BBOX
+def fetch_waterway(bbox=BBOX):
+    s, w, n, e = bbox
     q = f"""
     [out:json][timeout:60];
     (
@@ -145,8 +149,8 @@ def fetch_waterway():
     return feature_collection(feats)
 
 
-def fetch_government():
-    s, w, n, e = BBOX
+def fetch_government(bbox=BBOX):
+    s, w, n, e = bbox
     q = f"""
     [out:json][timeout:60];
     (
@@ -169,8 +173,8 @@ def fetch_government():
     return feature_collection(feats)
 
 
-def fetch_landuse():
-    s, w, n, e = BBOX
+def fetch_landuse(bbox=BBOX):
+    s, w, n, e = bbox
     q = f"""
     [out:json][timeout:60];
     (
@@ -191,6 +195,23 @@ def fetch_landuse():
             "geometry": way_to_polygon(el),
         })
     return feature_collection(feats)
+
+
+def fetch_all(bbox):
+    """Fetch every reference layer for an arbitrary bbox in one call -- used
+    by the upload feature to get real roads/rail/water/government/landuse for
+    wherever the user says their footage was captured. Any layer that fails
+    (Overpass is a shared, sometimes-flaky public service) comes back empty
+    rather than failing the whole request -- an upload with no rail nearby is
+    normal; an upload that 500s because a mirror timed out is not."""
+    out = {}
+    for name, fn in (("buildings", fetch_buildings), ("roads", fetch_roads), ("railway", fetch_railway),
+                      ("waterway", fetch_waterway), ("government", fetch_government), ("landuse", fetch_landuse)):
+        try:
+            out[name] = fn(bbox)
+        except Exception:
+            out[name] = feature_collection([])
+    return out
 
 
 def main():

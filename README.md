@@ -55,8 +55,9 @@ Two consequences, both handled honestly rather than hidden:
 - The model is trained and evaluated **only** on the one verified, completely
   digitised colony (found automatically by nearest-neighbour building
   spacing), using a genuine 5-fold random train/test split. The reported
-  numbers — **~57% of held-out buildings correctly located, 0.81 ROC-AUC,
-  67% precision** — are real generalization metrics, not measured against
+  numbers (rerun `model.py` and check `frontend/data/metrics.json` for the
+  exact current values — they shift slightly whenever the AOI or training
+  data changes) are real generalization metrics, not measured against
   incomplete ground truth.
 - The trained model is then applied to the full AOI. Most of its predictions
   there don't match an OSM building — that's flagged as `UNRECORDED` and is
