@@ -25,7 +25,7 @@ import subprocess
 import sys
 import time
 
-SMOKE = True  # True = a few iterations just to verify paths/shapes end-to-end
+SMOKE = False # True = a few iterations just to verify paths/shapes end-to-end
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "segmentation-models-pytorch==0.5.0"], check=True)
 
@@ -64,20 +64,18 @@ dev = "cuda" if torch.cuda.is_available() else "cpu"
 log("device", dev, torch.cuda.get_device_name(0) if dev == "cuda" else "")
 
 # ---------------------------------------------------------------- locate files
-ROOT = glob.glob("/kaggle/input/**/2_Ortho_RGB", recursive=True)
-assert ROOT, "Potsdam RGB folder not found under /kaggle/input"
-base = os.path.dirname(os.path.dirname(ROOT[0]))  # .../Potsdam
-
-
 def tile_id(path):
     m = re.search(r"potsdam_0?(\d+)_(\d+)", os.path.basename(path))
     return f"{int(m.group(1))}_{int(m.group(2))}"
 
 
-rgb = {tile_id(p): p for p in glob.glob(f"{base}/2_Ortho_RGB/**/*_RGB.tif", recursive=True)}
-lab = {tile_id(p): p for p in glob.glob(f"{base}/5_Labels_all/*_label.tif")}
-ndsm = {tile_id(p): p for p in glob.glob(f"{base}/1_DSM_normalisation/**/*normalized_lastools.jpg", recursive=True)}
-train_ids = sorted({tile_id(p) for p in glob.glob(f"{base}/5_Labels_for_participants/**/*_label.tif", recursive=True)})
+# the dataset nests folders (e.g. 2_Ortho_RGB/2_Ortho_RGB/), so search by folder name anywhere under the mount
+IN = "/kaggle/input"
+rgb = {tile_id(p): p for p in glob.glob(f"{IN}/**/2_Ortho_RGB/**/*_RGB.tif", recursive=True)}
+lab = {tile_id(p): p for p in glob.glob(f"{IN}/**/5_Labels_all/*_label.tif", recursive=True)}
+ndsm = {tile_id(p): p for p in glob.glob(f"{IN}/**/1_DSM_normalisation/**/*normalized_lastools.jpg", recursive=True)}
+train_ids = sorted({tile_id(p) for p in glob.glob(f"{IN}/**/5_Labels_for_participants/**/*_label.tif", recursive=True)})
+assert rgb and lab and ndsm, f"missing inputs: {len(rgb)} rgb, {len(lab)} labels, {len(ndsm)} ndsm under {IN}: {os.listdir(IN)}"
 all_ids = sorted(set(rgb) & set(lab) & set(ndsm))
 train_ids = [t for t in train_ids if t in all_ids]
 test_ids = [t for t in all_ids if t not in train_ids]
@@ -151,7 +149,8 @@ dice = smp.losses.DiceLoss("multiclass")
 weights = torch.tensor(np.clip(1.0 / np.sqrt(freq + 1e-3), 0, 10) / np.mean(np.clip(1.0 / np.sqrt(freq + 1e-3), 0, 10)),
                        dtype=torch.float32, device=dev)
 opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
-sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=5e-4, total_steps=EPOCHS * ITERS_PER_EPOCH, pct_start=0.1)
+sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=5e-4, total_steps=EPOCHS * ITERS_PER_EPOCH,
+                                            pct_start=max(0.1, 3 / (EPOCHS * ITERS_PER_EPOCH)))
 scaler = torch.amp.GradScaler(enabled=dev == "cuda")
 
 
