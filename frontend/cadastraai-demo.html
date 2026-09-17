@@ -1,0 +1,705 @@
+<title>CadastraAI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --bg:#0D1310;
+    --bg-elevated:#121A15;
+    --surface:#17201C;
+    --surface-2:#1E2924;
+    --border:#28352E;
+    --border-soft:#1E2925;
+    --text:#E7EEE9;
+    --text-dim:#9FB3A8;
+    --text-faint:#66796F;
+    --accent:#45C7B8;
+    --accent-soft:rgba(69,199,184,0.14);
+    --ok:#6CBE81;
+    --warning:#E0A94A;
+    --critical:#E2685F;
+    --change:#B694DA;
+    --font-display:'Big Shoulders','Arial Narrow',sans-serif;
+    --font-body:'IBM Plex Sans',system-ui,-apple-system,sans-serif;
+    --font-mono:'IBM Plex Mono','Consolas',monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-body);}
+  ::selection{background:var(--accent-soft);}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  button{font-family:inherit;}
+
+  .app{display:flex;flex-direction:column;height:100vh;min-height:600px;}
+
+  /* ---------- Topbar ---------- */
+  .topbar{
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+    padding:10px 20px;background:var(--bg-elevated);
+    border-bottom:1px solid var(--border);position:relative;z-index:20;
+  }
+  .brand{display:flex;flex-direction:column;gap:2px;margin-right:auto;}
+  .brand .wordmark{
+    font-family:var(--font-display);font-weight:900;font-size:1.5rem;
+    letter-spacing:0.02em;text-transform:uppercase;line-height:1;color:var(--text);
+  }
+  .brand .wordmark span{color:var(--accent);}
+  .brand .subtitle{
+    font-family:var(--font-mono);font-size:0.66rem;letter-spacing:0.06em;
+    text-transform:uppercase;color:var(--text-faint);
+  }
+
+  .segmented{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:7px;overflow:hidden;}
+  .segmented button{
+    padding:8px 14px;background:transparent;border:none;color:var(--text-dim);
+    font-family:var(--font-mono);font-size:0.72rem;letter-spacing:0.05em;cursor:pointer;
+    transition:background .15s,color .15s;
+  }
+  .segmented button.active{background:var(--accent);color:#04211D;font-weight:600;}
+  .segmented button:not(.active):hover{background:var(--surface-2);color:var(--text);}
+
+  .toggle-field{display:flex;align-items:center;gap:7px;font-size:0.78rem;color:var(--text-dim);}
+  .toggle-field input{accent-color:var(--accent);width:15px;height:15px;}
+
+  .ghost-btn{
+    background:var(--surface);border:1px solid var(--border);color:var(--text-dim);
+    padding:8px 13px;border-radius:7px;font-size:0.78rem;cursor:pointer;
+    transition:border-color .15s,color .15s;
+  }
+  .ghost-btn:hover{border-color:var(--accent);color:var(--text);}
+
+  .status-chip{
+    display:flex;align-items:center;gap:6px;
+    font-family:var(--font-mono);font-size:0.64rem;letter-spacing:0.05em;text-transform:uppercase;
+    color:var(--warning);border:1px solid rgba(224,169,74,0.4);background:rgba(224,169,74,0.08);
+    padding:6px 10px;border-radius:20px;white-space:nowrap;
+  }
+  .status-chip::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--warning);}
+
+  .about-panel{
+    position:absolute;top:100%;right:20px;margin-top:8px;width:min(420px,90vw);
+    background:var(--surface);border:1px solid var(--border);border-radius:10px;
+    padding:18px 20px;box-shadow:0 12px 32px rgba(0,0,0,0.45);
+    display:none;flex-direction:column;gap:12px;z-index:30;
+  }
+  .about-panel.open{display:flex;}
+  .about-panel h3{margin:0;font-family:var(--font-display);font-weight:700;font-size:1.05rem;letter-spacing:0.01em;}
+  .about-panel ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:8px;}
+  .about-panel li{font-size:0.83rem;line-height:1.5;color:var(--text-dim);}
+  .about-panel li b{color:var(--text);}
+  .about-panel .note{
+    font-size:0.75rem;line-height:1.5;color:var(--text-faint);border-top:1px solid var(--border-soft);
+    padding-top:10px;
+  }
+
+  /* ---------- Workspace ---------- */
+  .workspace{flex:1;display:grid;grid-template-columns:1fr 380px;min-height:0;}
+  @media (max-width:880px){.workspace{grid-template-columns:1fr;grid-template-rows:52vh 1fr;}}
+
+  .map-panel{position:relative;background:var(--bg);overflow:hidden;}
+  .map-panel svg{width:100%;height:100%;display:block;}
+  .map-hint{
+    position:absolute;left:16px;bottom:14px;font-family:var(--font-mono);font-size:0.66rem;
+    color:var(--text-faint);letter-spacing:0.03em;pointer-events:none;
+  }
+
+  .inspector{
+    border-left:1px solid var(--border);background:var(--surface);
+    overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:20px;
+  }
+  @media (max-width:880px){.inspector{border-left:none;border-top:1px solid var(--border);}}
+
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .stat-tile{background:var(--surface-2);border:1px solid var(--border-soft);border-radius:8px;padding:10px 12px;}
+  .stat-tile .num{font-family:var(--font-mono);font-size:1.35rem;font-weight:500;font-variant-numeric:tabular-nums;color:var(--text);}
+  .stat-tile .lbl{font-size:0.66rem;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint);margin-top:2px;}
+
+  .panel-title{
+    font-family:var(--font-display);font-weight:700;font-size:1rem;letter-spacing:0.01em;
+    text-transform:uppercase;color:var(--text);margin:0 0 10px 0;display:flex;align-items:center;justify-content:space-between;
+  }
+  .panel-title .back{font-family:var(--font-mono);font-size:0.7rem;color:var(--accent);cursor:pointer;text-transform:none;letter-spacing:0;}
+  .panel-title .back:hover{text-decoration:underline;}
+
+  .queue-row{
+    display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:7px;cursor:pointer;
+    border:1px solid transparent;
+  }
+  .queue-row:hover{background:var(--surface-2);border-color:var(--border-soft);}
+  .queue-row .id{font-family:var(--font-mono);font-size:0.8rem;color:var(--text);width:52px;flex:none;}
+  .queue-row .dots{display:flex;gap:4px;flex:none;}
+  .queue-row .dot{width:8px;height:8px;border-radius:50%;}
+  .queue-row .conf{margin-left:auto;font-family:var(--font-mono);font-size:0.72rem;color:var(--text-faint);flex:none;}
+
+  .legend-row{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:0.78rem;color:var(--text-dim);}
+  .legend-row svg{flex:none;}
+  .legend-row .txt b{color:var(--text);display:block;font-size:0.78rem;}
+  .legend-row .txt small{color:var(--text-faint);font-size:0.68rem;}
+
+  .badge{display:inline-block;font-family:var(--font-mono);font-size:0.62rem;letter-spacing:0.04em;
+    text-transform:uppercase;padding:3px 8px;border-radius:20px;border:1px solid var(--border);color:var(--text-dim);}
+  .badge.govt{color:var(--warning);border-color:rgba(224,169,74,0.4);background:rgba(224,169,74,0.08);}
+
+  .detail-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
+  .detail-head h2{font-family:var(--font-display);font-weight:900;font-size:1.6rem;margin:0;letter-spacing:0.01em;}
+
+  .kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;}
+  .kv{background:var(--surface-2);border:1px solid var(--border-soft);border-radius:8px;padding:9px 11px;}
+  .kv .k{font-size:0.64rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-faint);}
+  .kv .v{font-family:var(--font-mono);font-size:0.92rem;color:var(--text);margin-top:2px;font-variant-numeric:tabular-nums;}
+
+  .confbar{height:5px;border-radius:3px;background:var(--border-soft);margin-top:6px;overflow:hidden;}
+  .confbar i{display:block;height:100%;}
+
+  .findings{display:flex;flex-direction:column;gap:8px;margin-top:14px;}
+  .finding{
+    border-left:3px solid var(--border);background:var(--surface-2);border-radius:0 8px 8px 0;
+    padding:10px 12px;display:flex;gap:10px;align-items:flex-start;
+  }
+  .finding svg{flex:none;margin-top:2px;}
+  .finding .body b{display:block;font-size:0.82rem;color:var(--text);margin-bottom:2px;}
+  .finding .body p{margin:0;font-size:0.76rem;line-height:1.45;color:var(--text-dim);}
+  .finding .body .cite{font-family:var(--font-mono);font-size:0.66rem;color:var(--text-faint);margin-top:4px;}
+  .finding.sev-critical{border-color:var(--critical);}
+  .finding.sev-warning{border-color:var(--warning);}
+  .finding.sev-change{border-color:var(--change);}
+
+  .clean-msg{
+    margin-top:14px;padding:12px 13px;border-radius:8px;border:1px solid rgba(108,190,129,0.35);
+    background:rgba(108,190,129,0.08);color:var(--ok);font-size:0.82rem;display:flex;gap:8px;align-items:center;
+  }
+
+  .report-btn{
+    margin-top:16px;width:100%;padding:11px;border-radius:8px;border:1px solid var(--accent);
+    background:var(--accent-soft);color:var(--accent);font-size:0.82rem;font-weight:600;cursor:pointer;
+    letter-spacing:0.02em;
+  }
+  .report-btn:hover{background:rgba(69,199,184,0.24);}
+
+  .report-box{
+    margin-top:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);
+    padding:14px;display:none;
+  }
+  .report-box.open{display:block;}
+  .report-box .stamp{
+    display:inline-block;font-family:var(--font-mono);font-size:0.6rem;letter-spacing:0.04em;
+    color:var(--warning);border:1px dashed rgba(224,169,74,0.5);padding:2px 7px;border-radius:4px;margin-bottom:10px;
+  }
+  .report-box pre{
+    margin:0;white-space:pre-wrap;font-family:var(--font-mono);font-size:0.74rem;line-height:1.6;color:var(--text-dim);
+  }
+
+  @keyframes pulse{
+    0%,100%{opacity:1;transform:scale(1);}
+    50%{opacity:0.55;transform:scale(1.18);}
+  }
+  @media (prefers-reduced-motion:no-preference){
+    .alert-marker.critical{animation:pulse 1.8s ease-in-out infinite;transform-origin:center;transform-box:fill-box;}
+  }
+
+  .parcel-shape{cursor:pointer;transition:filter .12s;}
+  .parcel-shape:hover{filter:brightness(1.25);}
+  .parcel-shape.selected{stroke:var(--accent);stroke-width:1.4;}
+</style>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="wordmark">CADASTRA<span>AI</span></div>
+      <div class="subtitle">Compliance &amp; Change-Detection Layer · Team ELAVI · SIH 2026 · PS 26012</div>
+    </div>
+
+    <div class="segmented" id="flightToggle">
+      <button data-flight="flight1" class="active">JAN 2026</button>
+      <button data-flight="flight2">JUN 2026</button>
+    </div>
+
+    <label class="toggle-field"><input type="checkbox" id="bufferToggle" checked> Buffer zones</label>
+
+    <div style="position:relative;">
+      <button class="ghost-btn" id="aboutBtn">About this demo</button>
+      <div class="about-panel" id="aboutPanel">
+        <h3>What's actually novel here</h3>
+        <ol>
+          <li><b>Rule-based compliance engine</b> — every building footprint is checked automatically against the 30 m rail buffer, 15 m river buffer and adjoining government-land boundaries, with the legal basis cited alongside each alert.</li>
+          <li><b>Temporal change detection</b> — comparing two drone flights of the same ward surfaces new construction and footprint growth the moment it happens, not just a static snapshot. Toggle the flight date above.</li>
+          <li><b>Confidence-ranked verification queue</b> — every parcel carries a segmentation confidence score, so field staff know exactly which ones to check first, not all 13.</li>
+          <li><b>One-click verification notes</b> — findings are turned into a ready-to-route note for the revenue / railway / irrigation office instead of a manual write-up.</li>
+        </ol>
+        <div class="note">Parcels, buildings and violations shown here are simulated for demonstration. In production, footprints come from the U-Net / Mask R-CNN segmentation engine over real ORI + DSM−DTM height data, cross-checked against Bhu Naksha and SVAMITVA records — see our submission for the full pipeline.</div>
+      </div>
+    </div>
+
+    <div class="status-chip">Simulated demo data</div>
+  </header>
+
+  <main class="workspace">
+    <div class="map-panel">
+      <svg id="map" viewBox="0 0 225 205" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="map-hint">Click a parcel to inspect · Ward 4, Demo Block — not a real cadastral record</div>
+    </div>
+    <aside class="inspector" id="inspector"></aside>
+  </main>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============ CONSTANTS ============ */
+  var MAP_W = 225, MAP_H = 205;
+  var ROAD_THRESH = 3;      // metres — parcel counts as road-connected within this gap
+  var CHANGE_THRESH = 15;   // percent footprint growth that triggers a change alert
+  var RAIL_Y = 187;         // rail centreline (local metres, north-up)
+  var RAIL_BUFFER_Y = 157;  // south edge of the 30 m no-build buffer
+  var RIVER_X = 183;        // river bank (local metres)
+  var RIVER_BUFFER_X = 168; // east edge of the 15 m no-build buffer
+  var ANCHOR = {lat:19.9975, lng:73.7898}; // cosmetic GPS anchor for local (0,0)
+
+  var ROAD_BANDS = [
+    {x1:0,  y1:70,  x2:215, y2:76},   // horizontal corridor 1
+    {x1:0,  y1:116, x2:215, y2:122},  // horizontal corridor 2
+    {x1:45, y1:25,  x2:51,  y2:195},  // vertical corridor 1
+    {x1:91, y1:25,  x2:97,  y2:195},  // vertical corridor 2
+    {x1:137,y1:25,  x2:143, y2:195}   // vertical corridor 3
+  ];
+  var RAIL_BAND  = {x1:0,   y1:RAIL_BUFFER_Y, x2:215, y2:1000};
+  var RIVER_BAND = {x1:RIVER_BUFFER_X, y1:-40, x2:1000, y2:1000};
+
+  var LANDUSE_FILL = {
+    Residential:'#3E5A4E', Government:'#6B5E33', Commercial:'#3F4B63',
+    Agricultural:'#4C5A2E', Industrial:'#5A4640'
+  };
+
+  var ALERT_META = {
+    RAIL_BUFFER:  {label:'Rail Safety Buffer',            shape:'triangle', sev:'critical'},
+    RIVER_BUFFER: {label:'River Buffer Zone',              shape:'diamond',  sev:'critical'},
+    GOVT_ENCROACH:{label:'Government Land Encroachment',   shape:'hexagon',  sev:'critical'},
+    NO_ROAD:      {label:'No Direct Road Access',          shape:'square',   sev:'warning'},
+    CHANGE_NEW:   {label:'New Construction Detected',      shape:'circle',   sev:'change'},
+    CHANGE_GROWTH:{label:'Footprint Growth Detected',      shape:'circle',   sev:'change'}
+  };
+  var SEV_COLOR = {critical:'var(--critical)', warning:'var(--warning)', change:'var(--change)', ok:'var(--ok)'};
+
+  /* ============ DATA ============ */
+  var parcels = [
+    {id:'P1',  label:'P-01', cls:'Residential',  rect:{x1:5,  y1:30, x2:45, y2:70},  confidence:84},
+    {id:'P2',  label:'P-02', cls:'Government',   rect:{x1:51, y1:30, x2:91, y2:70},  confidence:95, isGovt:true},
+    {id:'P3',  label:'P-03', cls:'Residential',  rect:{x1:97, y1:30, x2:137,y2:70},  confidence:93},
+    {id:'P4',  label:'P-04', cls:'Commercial',   rect:{x1:143,y1:30, x2:183,y2:70},  confidence:90},
+    {id:'P5',  label:'P-05', cls:'Agricultural', rect:{x1:5,  y1:76, x2:45, y2:116}, confidence:81},
+    {id:'P6',  label:'P-06', cls:'Residential',  rect:{x1:51, y1:76, x2:91, y2:116}, confidence:96},
+    {id:'P7',  label:'P-07', cls:'Residential',  rect:{x1:97, y1:76, x2:137,y2:116}, confidence:88},
+    {id:'P8',  label:'P-08', cls:'Commercial',   rect:{x1:143,y1:76, x2:183,y2:116}, confidence:79},
+    {id:'P9',  label:'P-09', cls:'Agricultural', rect:{x1:5,  y1:122,x2:45, y2:175}, confidence:91},
+    {id:'P10', label:'P-10', cls:'Residential',  rect:{x1:51, y1:122,x2:91, y2:175}, confidence:94},
+    {id:'P11', label:'P-11', cls:'Residential',  rect:{x1:97, y1:122,x2:137,y2:175}, confidence:77},
+    {id:'P12', label:'P-12', cls:'Industrial',   rect:{x1:143,y1:122,x2:183,y2:175}, confidence:92},
+    {id:'P13', label:'P-13', cls:'Residential',  rect:{x1:10, y1:5,  x2:35, y2:23},  confidence:90}
+  ];
+
+  var buildings1 = {
+    P1:{x1:12,y1:37,x2:38,y2:55}, P2:{x1:60,y1:40,x2:82,y2:60}, P3:{x1:105,y1:37,x2:128,y2:55},
+    P4:{x1:150,y1:37,x2:165,y2:55}, P5:null, P6:{x1:58,y1:83,x2:82,y2:103}, P7:{x1:105,y1:83,x2:125,y2:99},
+    P8:{x1:150,y1:85,x2:180,y2:105}, P9:{x1:15,y1:130,x2:25,y2:138}, P10:{x1:58,y1:130,x2:82,y2:150},
+    P11:{x1:105,y1:130,x2:130,y2:147}, P12:{x1:148,y1:128,x2:163,y2:148}, P13:{x1:15,y1:9,x2:30,y2:19}
+  };
+  var buildings2 = Object.assign({}, buildings1, {
+    P1:{x1:12,y1:37,x2:55,y2:55},
+    P5:{x1:15,y1:85,x2:35,y2:103},
+    P7:{x1:105,y1:83,x2:130,y2:105},
+    P11:{x1:105,y1:130,x2:130,y2:158}
+  });
+  var FLIGHTS = {flight1:{label:'Jan 2026', buildings:buildings1}, flight2:{label:'Jun 2026', buildings:buildings2}};
+
+  var CITATIONS = {
+    RAIL_BUFFER: 'Railways Act, 1989 — Sec. 3 (30 m safety strip)',
+    RIVER_BUFFER: 'State River Regulation Zone norms (15 m setback)',
+    GOVT_ENCROACH: 'Revenue Dept. review — encroachment on classified government land',
+    NO_ROAD: 'Right-of-way / access easement review recommended',
+    CHANGE_NEW: 'Verify land-use conversion / building permit',
+    CHANGE_GROWTH: 'Possible unauthorized extension — verify permit'
+  };
+
+  /* ============ GEOMETRY HELPERS (plain axis-aligned rectangle math) ============ */
+  function overlap(a,b){ return a.x1<b.x2 && a.x2>b.x1 && a.y1<b.y2 && a.y2>b.y1; }
+  function area(r){ return r ? (r.x2-r.x1)*(r.y2-r.y1) : 0; }
+  function pointToRectDist(px,py,r){
+    var dx = Math.max(r.x1-px, 0, px-r.x2);
+    var dy = Math.max(r.y1-py, 0, py-r.y2);
+    return Math.sqrt(dx*dx+dy*dy);
+  }
+  function rectToBandDist(r,b){
+    if(overlap(r,b)) return 0;
+    var pts=[[r.x1,r.y1],[r.x2,r.y1],[r.x1,r.y2],[r.x2,r.y2]];
+    var min=Infinity;
+    pts.forEach(function(p){ min=Math.min(min, pointToRectDist(p[0],p[1],b)); });
+    return min;
+  }
+  function toSvgY(yNorth){ return MAP_H - yNorth; }
+  function rectAttr(r){ return {x:r.x1, y:toSvgY(r.y2), w:r.x2-r.x1, h:r.y2-r.y1}; }
+  function metersToLatLng(x,y){
+    var lat = ANCHOR.lat + (y-25)/111320;
+    var lng = ANCHOR.lng + x/(111320*Math.cos(ANCHOR.lat*Math.PI/180));
+    return {lat:lat, lng:lng};
+  }
+
+  /* ============ RULE ENGINE ============ */
+  function evaluateParcel(p, flightKey){
+    var bldgs = FLIGHTS[flightKey].buildings;
+    var bldg = bldgs[p.id];
+    var alerts = [];
+
+    if(bldg && !p.isGovt){
+      if(overlap(bldg, RAIL_BAND)){
+        var railGap = RAIL_Y - bldg.y2;
+        alerts.push({type:'RAIL_BUFFER', msg:'Building footprint sits only '+railGap.toFixed(0)+' m from the rail centreline — inside the mandatory 30 m safety buffer.'});
+      }
+      if(overlap(bldg, RIVER_BAND)){
+        var riverGap = RIVER_X - bldg.x2;
+        alerts.push({type:'RIVER_BUFFER', msg:'Building footprint comes within '+riverGap.toFixed(0)+' m of the river bank — 15 m clearance required.'});
+      }
+      parcels.forEach(function(g){
+        if(g.isGovt && overlap(bldg, g.rect)){
+          var overlapWidth = Math.min(bldg.x2,g.rect.x2) - Math.max(bldg.x1,g.rect.x1);
+          alerts.push({type:'GOVT_ENCROACH', msg:'Structure extends roughly '+overlapWidth.toFixed(0)+' m onto adjoining government parcel '+g.label+'.'});
+        }
+      });
+    }
+
+    var roadDist = Math.min.apply(null, ROAD_BANDS.map(function(b){ return rectToBandDist(p.rect,b); }));
+    if(roadDist > ROAD_THRESH){
+      alerts.push({type:'NO_ROAD', msg:'Nearest mapped road is ~'+roadDist.toFixed(0)+' m away — parcel is landlocked.'});
+    }
+
+    if(!p.isGovt){
+      var a1 = area(buildings1[p.id]), a2 = area(buildings2[p.id]);
+      if(a1===0 && a2>0){
+        alerts.push({type:'CHANGE_NEW', msg:'No structure existed in Jan 2026; a '+a2.toFixed(0)+' m² building now appears on '+p.cls.toLowerCase()+' land.'});
+      } else if(a1>0){
+        var pct = (a2-a1)/a1*100;
+        if(pct >= CHANGE_THRESH){
+          alerts.push({type:'CHANGE_GROWTH', msg:'Footprint grew '+pct.toFixed(0)+'% between flights ('+a1.toFixed(0)+' m² → '+a2.toFixed(0)+' m²), above the '+CHANGE_THRESH+'% alert threshold.'});
+        }
+      }
+    }
+    return alerts;
+  }
+
+  /* ============ SVG ICON SHAPES (6m across, centred at 0,0, y already in SVG space i.e. pre-flip) ============ */
+  function shapePath(shape, cx, cy, r){
+    switch(shape){
+      case 'triangle': return 'M '+cx+' '+(cy-r)+' L '+(cx+r*0.95)+' '+(cy+r*0.8)+' L '+(cx-r*0.95)+' '+(cy+r*0.8)+' Z';
+      case 'diamond':  return 'M '+cx+' '+(cy-r)+' L '+(cx+r)+' '+cy+' L '+cx+' '+(cy+r)+' L '+(cx-r)+' '+cy+' Z';
+      case 'square':   return 'M '+(cx-r*0.85)+' '+(cy-r*0.85)+' h '+(r*1.7)+' v '+(r*1.7)+' h '+(-r*1.7)+' Z';
+      case 'hexagon':
+        var pts=[]; for(var i=0;i<6;i++){var a=Math.PI/6+i*Math.PI/3; pts.push((cx+r*Math.cos(a))+' '+(cy+r*Math.sin(a)));}
+        return 'M '+pts.join(' L ')+' Z';
+      default: return '';
+    }
+  }
+  function iconSvg(shape, sev, size){
+    size = size||16;
+    var r = size/2 - 1.5, cx=size/2, cy=size/2, col='var(--'+sev+')';
+    if(shape==='circle'){
+      return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'"><circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+col+'" stroke-width="2"/><path d="M '+cx+' '+(cy+r*0.5)+' L '+cx+' '+(cy-r*0.5)+' M '+(cx-r*0.35)+' '+(cy-r*0.1)+' L '+cx+' '+(cy-r*0.5)+' L '+(cx+r*0.35)+' '+(cy-r*0.1)+'" fill="none" stroke="'+col+'" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    }
+    return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'"><path d="'+shapePath(shape,cx,cy,r)+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"/></svg>';
+  }
+
+  /* ============ STATIC LAYER RENDER (drawn once) ============ */
+  var svg = document.getElementById('map');
+
+  function svgRectFromMeters(r, attrs){
+    var a = rectAttr(r);
+    return '<rect x="'+a.x+'" y="'+a.y+'" width="'+a.w+'" height="'+a.h+'" '+attrs+' />';
+  }
+
+  function buildStatic(){
+    var out = '';
+
+    out += '<defs><pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">'+
+      '<path d="M 20 0 L 0 0 0 20" fill="none" stroke="#1A2420" stroke-width="0.5"/></pattern></defs>';
+    out += '<rect x="0" y="0" width="'+MAP_W+'" height="'+MAP_H+'" fill="#111B15"/>';
+    out += '<rect x="0" y="0" width="'+MAP_W+'" height="'+MAP_H+'" fill="url(#grid)"/>';
+
+    // buffer tint zones (toggleable)
+    out += '<g id="bufferZones">';
+    out += svgRectFromMeters(RAIL_BAND,  'fill="var(--critical)" fill-opacity="0.08"');
+    out += svgRectFromMeters(RIVER_BAND, 'fill="var(--critical)" fill-opacity="0.08"');
+    out += '</g>';
+
+    // road bands + centre dashes
+    ROAD_BANDS.forEach(function(b){
+      out += svgRectFromMeters(b, 'fill="#2A342E" stroke="#20291F" stroke-width="0.4"');
+      var horiz = (b.x2-b.x1) > (b.y2-b.y1);
+      var midY = toSvgY((b.y1+b.y2)/2), midX=(b.x1+b.x2)/2;
+      if(horiz){ out += '<line x1="'+b.x1+'" y1="'+midY+'" x2="'+b.x2+'" y2="'+midY+'" stroke="#4E5C52" stroke-width="0.5" stroke-dasharray="3 3"/>'; }
+      else{ out += '<line x1="'+midX+'" y1="'+toSvgY(b.y1)+'" x2="'+midX+'" y2="'+toSvgY(b.y2)+'" stroke="#4E5C52" stroke-width="0.5" stroke-dasharray="3 3"/>'; }
+    });
+
+    // river (simple meander polygon)
+    var riverPts = [[225,0],[225,205],[183,205],[189,170],[181,135],[190,100],[182,65],[188,30],[183,0]];
+    var riverSvg = riverPts.map(function(p){ return p[0]+','+toSvgY(p[1]); }).join(' ');
+    out += '<polygon points="'+riverSvg+'" fill="#2E5A73" fill-opacity="0.75" stroke="#3E7A98" stroke-width="0.5"/>';
+
+    // rail line + sleepers
+    var ry = toSvgY(RAIL_Y);
+    out += '<line x1="0" y1="'+(ry-1.2)+'" x2="'+MAP_W+'" y2="'+(ry-1.2)+'" stroke="#8A7A5A" stroke-width="0.6"/>';
+    out += '<line x1="0" y1="'+(ry+1.2)+'" x2="'+MAP_W+'" y2="'+(ry+1.2)+'" stroke="#8A7A5A" stroke-width="0.6"/>';
+    for(var x=3;x<MAP_W;x+=6){ out += '<line x1="'+x+'" y1="'+(ry-3)+'" x2="'+x+'" y2="'+(ry+3)+'" stroke="#6B5D42" stroke-width="1"/>'; }
+
+    // parcels
+    parcels.forEach(function(p){
+      var a = rectAttr(p.rect);
+      var fill = LANDUSE_FILL[p.cls] || '#3E5A4E';
+      out += '<rect class="parcel-shape" data-id="'+p.id+'" x="'+a.x+'" y="'+a.y+'" width="'+a.w+'" height="'+a.h+'" '+
+             'fill="'+fill+'" fill-opacity="0.55" stroke="#0D1310" stroke-width="0.8"/>';
+      if(p.isGovt){
+        out += '<rect x="'+a.x+'" y="'+a.y+'" width="'+a.w+'" height="'+a.h+'" fill="url(#hatch)" pointer-events="none"/>';
+      }
+      var cx = (p.rect.x1+p.rect.x2)/2, cyLabel = toSvgY(p.rect.y2)+7;
+      out += '<text x="'+cx+'" y="'+cyLabel+'" font-family="IBM Plex Mono, monospace" font-size="4.6" fill="#7C9186" text-anchor="middle" pointer-events="none">'+p.label+'</text>';
+    });
+
+    svg.innerHTML = '<defs><pattern id="hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">'+
+      '<line x1="0" y1="0" x2="0" y2="6" stroke="#E0A94A" stroke-width="1.1" stroke-opacity="0.35"/></pattern></defs>' + out;
+  }
+
+  /* ============ DYNAMIC LAYER RENDER (buildings + alerts, redraws on flight/select change) ============ */
+  var state = { flight:'flight1', selected:null };
+
+  function buildDynamic(){
+    var flightAlerts = {};
+    parcels.forEach(function(p){ flightAlerts[p.id] = evaluateParcel(p, state.flight); });
+
+    var out = '<g id="dynamicLayer">';
+    var bldgs = FLIGHTS[state.flight].buildings;
+
+    parcels.forEach(function(p){
+      var b = bldgs[p.id];
+      if(!b) return;
+      var a = rectAttr(b);
+      var hasCritical = flightAlerts[p.id].some(function(al){ return ALERT_META[al.type].sev==='critical'; });
+      var stroke = hasCritical ? 'var(--critical)' : '#D8DCD3';
+      out += '<rect x="'+a.x+'" y="'+a.y+'" width="'+a.w+'" height="'+a.h+'" fill="#C9CDC4" fill-opacity="0.85" stroke="'+stroke+'" stroke-width="'+(hasCritical?1.1:0.6)+'" pointer-events="none"/>';
+    });
+
+    // alert markers, stacked if multiple on one parcel
+    parcels.forEach(function(p){
+      var al = flightAlerts[p.id];
+      if(!al.length) return;
+      var cx = (p.rect.x1+p.rect.x2)/2, cy = toSvgY((p.rect.y1+p.rect.y2)/2);
+      var startX = cx - (al.length-1)*4.5;
+      al.forEach(function(item, i){
+        var meta = ALERT_META[item.type];
+        var mx = startX + i*9, my = cy;
+        out += '<g class="alert-marker '+meta.sev+'" transform="translate('+(mx-8)+','+(my-8)+')" pointer-events="none">'+iconSvg(meta.shape, meta.sev, 16)+'</g>';
+      });
+    });
+
+    // low-confidence dashed outline
+    parcels.forEach(function(p){
+      if(p.confidence < 85){
+        var a = rectAttr(p.rect);
+        out += '<rect x="'+(a.x+0.6)+'" y="'+(a.y+0.6)+'" width="'+(a.w-1.2)+'" height="'+(a.h-1.2)+'" fill="none" stroke="var(--warning)" stroke-width="0.7" stroke-dasharray="2.4 2" pointer-events="none"/>';
+      }
+    });
+
+    if(state.selected){
+      var sp = parcels.find(function(p){ return p.id===state.selected; });
+      if(sp){ var sa=rectAttr(sp.rect); out += '<rect x="'+sa.x+'" y="'+sa.y+'" width="'+sa.w+'" height="'+sa.h+'" fill="none" stroke="var(--accent)" stroke-width="1.6" pointer-events="none"/>'; }
+    }
+
+    out += '</g>';
+
+    var existing = document.getElementById('dynamicLayer');
+    if(existing) existing.remove();
+    svg.insertAdjacentHTML('beforeend', out);
+
+    document.getElementById('bufferZones').style.display = document.getElementById('bufferToggle').checked ? '' : 'none';
+
+    return flightAlerts;
+  }
+
+  /* ============ SIDEBAR ============ */
+  var inspector = document.getElementById('inspector');
+
+  function confColor(c){ return c>=90 ? 'var(--ok)' : c>=80 ? 'var(--warning)' : 'var(--critical)'; }
+
+  function renderOverview(flightAlerts){
+    var flagged = parcels.filter(function(p){ return flightAlerts[p.id].length>0; }).length;
+    var avgConf = Math.round(parcels.reduce(function(s,p){ return s+p.confidence; },0)/parcels.length);
+    var changed = parcels.filter(function(p){ return area(buildings1[p.id]) !== area(buildings2[p.id]); }).length;
+
+    var priority = parcels.slice().sort(function(a,b){
+      var av=flightAlerts[a.id].some(function(x){return ALERT_META[x.type].sev==='critical';});
+      var bv=flightAlerts[b.id].some(function(x){return ALERT_META[x.type].sev==='critical';});
+      if(av!==bv) return av? -1:1;
+      var al=flightAlerts[a.id].length, bl=flightAlerts[b.id].length;
+      if(al!==bl) return bl-al;
+      return a.confidence-b.confidence;
+    }).slice(0,6);
+
+    var html = '';
+    html += '<div><h3 class="panel-title">Ward Overview</h3>'+
+      '<div class="stat-grid">'+
+        '<div class="stat-tile"><div class="num">'+parcels.length+'</div><div class="lbl">Parcels mapped</div></div>'+
+        '<div class="stat-tile"><div class="num" style="color:'+(flagged?'var(--warning)':'var(--ok)')+'">'+flagged+'</div><div class="lbl">Flagged this flight</div></div>'+
+        '<div class="stat-tile"><div class="num">'+avgConf+'%</div><div class="lbl">Avg. confidence</div></div>'+
+        '<div class="stat-tile"><div class="num">'+changed+'</div><div class="lbl">Footprints changed</div></div>'+
+      '</div></div>';
+
+    html += '<div><h3 class="panel-title">Field Verification Queue</h3>';
+    priority.forEach(function(p){
+      var al = flightAlerts[p.id];
+      var dots = al.map(function(x){ return '<span class="dot" style="background:'+SEV_COLOR[ALERT_META[x.type].sev]+'"></span>'; }).join('');
+      html += '<div class="queue-row" data-id="'+p.id+'"><span class="id">'+p.label+'</span><span class="dots">'+dots+'</span><span class="conf" style="color:'+confColor(p.confidence)+'">'+p.confidence+'%</span></div>';
+    });
+    html += '</div>';
+
+    html += '<div><h3 class="panel-title">Key / Legend</h3>';
+    Object.keys(ALERT_META).forEach(function(k){
+      var m = ALERT_META[k];
+      html += '<div class="legend-row">'+iconSvg(m.shape,m.sev,18)+'<div class="txt"><b>'+m.label+'</b><small>'+CITATIONS[k]+'</small></div></div>';
+    });
+    html += '<div class="legend-row" style="margin-top:4px;"><span style="width:14px;height:14px;border:1.4px dashed var(--warning);border-radius:3px;flex:none;"></span><div class="txt"><b>Low confidence (&lt;85%)</b><small>Segmentation uncertain — verify manually</small></div></div>';
+    html += '<div class="legend-row"><span style="width:14px;height:14px;border-radius:3px;background:var(--warning);opacity:0.2;flex:none;"></span><div class="txt"><b>Buffer zone tint</b><small>Rail 30 m / river 15 m no-build strip</small></div></div>';
+    html += '</div>';
+
+    inspector.innerHTML = html;
+
+    inspector.querySelectorAll('.queue-row').forEach(function(row){
+      row.addEventListener('click', function(){ selectParcel(row.getAttribute('data-id')); });
+    });
+  }
+
+  function renderDetail(p, alerts){
+    var b1a = area(buildings1[p.id]), b2a = area(buildings2[p.id]);
+    var gps = metersToLatLng((p.rect.x1+p.rect.x2)/2, (p.rect.y1+p.rect.y2)/2);
+    var roadOk = !alerts.some(function(a){ return a.type==='NO_ROAD'; });
+
+    var html = '<div>';
+    html += '<h3 class="panel-title"><span class="back" id="backBtn">&larr; Overview</span></h3>';
+    html += '<div class="detail-head"><h2>'+p.label+'</h2><span class="badge'+(p.isGovt?' govt':'')+'">'+p.cls+'</span></div>';
+
+    html += '<div class="kv-grid">'+
+      '<div class="kv"><div class="k">Area</div><div class="v">'+area(p.rect).toFixed(0)+' m²</div></div>'+
+      '<div class="kv"><div class="k">Road access</div><div class="v" style="color:'+(roadOk?'var(--ok)':'var(--critical)')+'">'+(roadOk?'Connected':'Landlocked')+'</div></div>'+
+      '<div class="kv" style="grid-column:1/-1;"><div class="k">GPS centroid (approx.)</div><div class="v">'+gps.lat.toFixed(5)+'° N, '+gps.lng.toFixed(5)+'° E</div></div>'+
+      '<div class="kv" style="grid-column:1/-1;"><div class="k">Segmentation confidence — '+p.confidence+'%</div><div class="confbar"><i style="width:'+p.confidence+'%;background:'+confColor(p.confidence)+';"></i></div></div>'+
+      '</div>';
+
+    if(b1a!==b2a){
+      html += '<div class="kv" style="margin-top:10px;"><div class="k">Building footprint, Jan → Jun</div>'+
+        '<div class="v">'+b1a.toFixed(0)+' m² → '+b2a.toFixed(0)+' m² <span style="color:var(--change)">('+(b1a?(((b2a-b1a)/b1a*100).toFixed(0)+'%'):'new')+')</span></div></div>';
+    }
+
+    if(alerts.length){
+      html += '<div class="findings">';
+      alerts.forEach(function(a){
+        var meta = ALERT_META[a.type];
+        html += '<div class="finding sev-'+meta.sev+'">'+iconSvg(meta.shape,meta.sev,18)+
+          '<div class="body"><b>'+meta.label+'</b><p>'+a.msg+'</p><div class="cite">'+CITATIONS[a.type]+'</div></div></div>';
+      });
+      html += '</div>';
+    } else {
+      html += '<div class="clean-msg">&#10003; No issues detected — compliant across both flights</div>';
+    }
+
+    html += '<button class="report-btn" id="reportBtn">Generate Verification Note</button>';
+    html += '<div class="report-box" id="reportBox"><span class="stamp">SYSTEM-GENERATED · SIMULATED — NOT A LEGAL DOCUMENT</span><pre id="reportText"></pre></div>';
+    html += '</div>';
+
+    inspector.innerHTML = html;
+    document.getElementById('backBtn').addEventListener('click', function(){ selectParcel(null); });
+    document.getElementById('reportBtn').addEventListener('click', function(){
+      var box = document.getElementById('reportBox');
+      box.classList.toggle('open');
+      if(box.classList.contains('open')){
+        document.getElementById('reportText').textContent = buildReport(p, alerts, gps);
+      }
+    });
+  }
+
+  function buildReport(p, alerts, gps){
+    var now = new Date();
+    var lines = [];
+    lines.push('CADASTRAAI — FIELD VERIFICATION NOTE');
+    lines.push('Ref: CADAI-'+now.getFullYear()+'-'+p.id+'   Generated: '+now.toISOString().slice(0,10));
+    lines.push('Flight reviewed: '+FLIGHTS[state.flight].label);
+    lines.push('');
+    lines.push('Parcel: '+p.label+'  |  Land-use: '+p.cls+'  |  Area: '+area(p.rect).toFixed(0)+' m²');
+    lines.push('Centroid (approx.): '+gps.lat.toFixed(5)+'° N, '+gps.lng.toFixed(5)+'° E');
+    lines.push('Segmentation confidence: '+p.confidence+'%');
+    lines.push('');
+    if(alerts.length){
+      lines.push('FINDINGS');
+      alerts.forEach(function(a,i){
+        lines.push((i+1)+'. '+ALERT_META[a.type].label+' — '+a.msg);
+        lines.push('   Reference: '+CITATIONS[a.type]);
+      });
+      lines.push('');
+      lines.push('RECOMMENDED ACTION');
+      lines.push('Route to the relevant department for field verification within 15 days.');
+    } else {
+      lines.push('FINDINGS');
+      lines.push('None. Parcel appears compliant across both reviewed flights.');
+    }
+    lines.push('');
+    lines.push('This note is generated by an automated analysis pipeline for planning/triage');
+    lines.push('purposes. It is not a legal notice and requires field verification and');
+    lines.push('authorized sign-off before any action.');
+    return lines.join('\n');
+  }
+
+  /* ============ WIRE-UP ============ */
+  var currentAlerts = {};
+
+  function refresh(){
+    currentAlerts = buildDynamic();
+    if(state.selected){
+      var p = parcels.find(function(x){ return x.id===state.selected; });
+      renderDetail(p, currentAlerts[p.id]);
+    } else {
+      renderOverview(currentAlerts);
+    }
+  }
+
+  function selectParcel(id){
+    state.selected = id;
+    refresh();
+  }
+
+  document.getElementById('flightToggle').addEventListener('click', function(e){
+    var btn = e.target.closest('button[data-flight]');
+    if(!btn) return;
+    document.querySelectorAll('#flightToggle button').forEach(function(b){ b.classList.remove('active'); });
+    btn.classList.add('active');
+    state.flight = btn.getAttribute('data-flight');
+    refresh();
+  });
+
+  document.getElementById('bufferToggle').addEventListener('change', refresh);
+
+  document.getElementById('aboutBtn').addEventListener('click', function(){
+    document.getElementById('aboutPanel').classList.toggle('open');
+  });
+  document.addEventListener('click', function(e){
+    var panel = document.getElementById('aboutPanel'), btn = document.getElementById('aboutBtn');
+    if(panel.classList.contains('open') && !panel.contains(e.target) && e.target!==btn){
+      panel.classList.remove('open');
+    }
+  });
+
+  svg.addEventListener('click', function(e){
+    var el = e.target.closest('.parcel-shape');
+    if(el) selectParcel(el.getAttribute('data-id'));
+  });
+
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape' && state.selected) selectParcel(null);
+  });
+
+  buildStatic();
+  refresh();
+})();
+</script>

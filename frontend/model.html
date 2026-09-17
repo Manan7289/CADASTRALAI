@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CadastraAI — Model Output</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="app.css">
+<style>
+.viewer{position:relative;width:100%;height:100%;overflow:hidden;background:#0a0f0c;cursor:grab;}
+.viewer.dragging{cursor:grabbing;}
+.stage{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform;}
+.stage img{position:absolute;top:0;left:0;display:block;image-rendering:auto;user-select:none;-webkit-user-drag:none;}
+.stage img.hidden{display:none;}
+/* Split mode clips the right-hand layer; the divider moves the clip edge. */
+.stage img.clipped{clip-path:inset(0 0 0 var(--split));}
+.divider{position:absolute;top:0;bottom:0;width:2px;background:var(--accent);cursor:ew-resize;z-index:5;}
+.divider::after{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:30px;height:30px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px rgba(69,199,184,0.25);}
+.divider::before{content:"⇄";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2;color:#04211D;font-size:14px;font-weight:700;}
+.viewer-hud{position:absolute;left:14px;bottom:14px;z-index:6;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.hud-chip{font-family:var(--font-mono);font-size:0.64rem;letter-spacing:0.05em;text-transform:uppercase;background:rgba(13,19,16,0.85);border:1px solid var(--border);color:var(--text-dim);padding:6px 10px;border-radius:20px;}
+.corner-tag{position:absolute;top:14px;z-index:6;font-family:var(--font-mono);font-size:0.64rem;letter-spacing:0.06em;text-transform:uppercase;background:rgba(13,19,16,0.85);border:1px solid var(--border);padding:6px 10px;border-radius:6px;color:var(--text-dim);}
+.curve{width:100%;height:78px;display:block;background:var(--surface-2);border:1px solid var(--border-soft);border-radius:8px;}
+.cmp{width:100%;border-collapse:collapse;margin-top:10px;font-size:0.78rem;}
+.cmp th,.cmp td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border-soft);}
+.cmp th{font-size:0.6rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-faint);font-weight:500;}
+.cmp td.n{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}
+.cmp tr.win td{color:var(--accent);}
+.note{font-size:0.74rem;line-height:1.5;color:var(--text-dim);background:var(--surface-2);border-left:3px solid var(--accent);border-radius:0 8px 8px 0;padding:10px 12px;margin-top:12px;}
+.missing{font-size:0.8rem;line-height:1.6;color:var(--text-dim);}
+.missing code{font-family:var(--font-mono);font-size:0.74rem;background:var(--surface-2);border:1px solid var(--border-soft);border-radius:4px;padding:1px 5px;color:var(--accent);}
+.swatch{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:7px;vertical-align:-1px;border:1px solid rgba(255,255,255,0.15);}
+
+/* UAVid gallery: columns are frames, rows are source / labels / overlay --
+   the same three-row figure the dataset presents its own results with. */
+.gallery{position:absolute;inset:0;overflow:auto;padding:16px;background:#0a0f0c;}
+.gallery-grid{display:grid;gap:8px;min-width:min-content;}
+.gallery-grid img{width:100%;display:block;border-radius:5px;border:1px solid var(--border-soft);background:#000;}
+.row-label{display:flex;align-items:center;font-family:var(--font-mono);font-size:0.62rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-faint);white-space:nowrap;padding-right:6px;position:sticky;left:0;background:#0a0f0c;z-index:2;}
+.frame-cap{font-family:var(--font-mono);font-size:0.6rem;color:var(--text-faint);text-align:center;letter-spacing:0.04em;}
+.legend-wrap{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border-soft);}
+.legend-item{display:flex;align-items:center;font-size:0.7rem;color:var(--text-dim);}
+.gallery-empty{display:flex;align-items:center;justify-content:center;height:100%;padding:40px;text-align:center;}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="wordmark">CADASTRA<span>AI</span></div>
+      <div class="subtitle">Model Output · U-Net trained on Inria + UAVid · Team ELAVI</div>
+    </div>
+    <nav class="segmented">
+      <a href="index.html">CADASTRAL MAP</a>
+      <a href="detection.html">COMPLIANCE &amp; DETECTION</a>
+      <a href="model.html" class="active">MODEL OUTPUT</a>
+      <a href="upload.html">UPLOAD YOUR OWN</a>
+    </nav>
+    <div class="segmented" id="viewToggle">
+      <button data-view="buildings" class="active">BUILDINGS · INRIA</button>
+      <button data-view="semantic">SEMANTIC · UAVID</button>
+    </div>
+    <div class="segmented" id="modeToggle">
+      <button data-mode="split" class="active">SPLIT</button>
+      <button data-mode="image">IMAGERY</button>
+      <button data-mode="mask">MASK</button>
+      <button data-mode="overlay">OVERLAY</button>
+    </div>
+    <div class="status-chip" id="statusChip">Loading…</div>
+  </header>
+
+  <main class="workspace">
+    <div class="map-panel">
+      <div class="viewer" id="viewer">
+        <div class="stage" id="stage">
+          <img id="imgSource" alt="AOI imagery at 0.56 m/px">
+          <img id="imgMask" alt="Predicted building mask">
+          <img id="imgOverlay" alt="Mask over imagery">
+        </div>
+        <div class="divider" id="divider" style="left:50%"></div>
+        <div class="corner-tag" id="tagLeft" style="left:14px">Imagery</div>
+        <div class="corner-tag" id="tagRight" style="right:14px">Predicted mask</div>
+        <div class="viewer-hud">
+          <span class="hud-chip" id="zoomChip">100%</span>
+          <span class="hud-chip">Scroll to zoom · drag to pan</span>
+          <span class="hud-chip" id="gsdChip"></span>
+        </div>
+      </div>
+      <div class="gallery" id="gallery" style="display:none"></div>
+      <div class="loading" id="loadingScreen">Loading model output…</div>
+    </div>
+    <aside class="inspector" id="inspector"></aside>
+  </main>
+</div>
+
+<script src="shared.js"></script>
+<script>
+(function(){
+"use strict";
+
+var els = {
+  viewer: document.getElementById('viewer'),
+  stage: document.getElementById('stage'),
+  divider: document.getElementById('divider'),
+  tagLeft: document.getElementById('tagLeft'),
+  tagRight: document.getElementById('tagRight'),
+  zoomChip: document.getElementById('zoomChip'),
+  gsdChip: document.getElementById('gsdChip'),
+  statusChip: document.getElementById('statusChip'),
+  loading: document.getElementById('loadingScreen'),
+  inspector: document.getElementById('inspector'),
+  source: document.getElementById('imgSource'),
+  mask: document.getElementById('imgMask'),
+  overlay: document.getElementById('imgOverlay')
+};
+
+var view = {scale:1, x:0, y:0, mode:'split', split:0.5, w:0, h:0, fitScale:1};
+
+function getJson(name){
+  return fetch(dataUrl(name)).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+}
+function headOk(name){
+  return fetch(dataUrl(name), {method:'HEAD'}).then(function(r){ return r.ok; }).catch(function(){ return false; });
+}
+function num(v, digits){
+  return (v === null || v === undefined || isNaN(v)) ? '—' : Number(v).toFixed(digits === undefined ? 3 : digits);
+}
+function esc(s){
+  return String(s).replace(/[&<>"]/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; });
+}
+
+// ---------- viewer ----------
+function applyTransform(){
+  els.stage.style.transform = 'translate('+view.x+'px,'+view.y+'px) scale('+view.scale+')';
+  els.zoomChip.textContent = Math.round(view.scale/view.fitScale*100)+'%';
+  updateSplit();
+}
+function updateSplit(){
+  var show = view.mode;
+  // Imagery stays under everything except in pure mask mode, so overlay mode is
+  // a real blend rather than red shapes floating on the backdrop.
+  els.source.classList.toggle('hidden', show==='mask');
+  els.mask.classList.toggle('hidden', !(show==='split' || show==='mask'));
+  els.overlay.classList.toggle('hidden', show!=='overlay');
+  els.mask.classList.toggle('clipped', show==='split');
+  var splitting = show==='split';
+  els.divider.style.display = splitting ? 'block' : 'none';
+  els.tagLeft.style.display = splitting ? 'block' : 'none';
+  els.tagRight.style.display = splitting ? 'block' : 'none';
+  if(splitting){
+    var px = view.split*els.viewer.clientWidth;
+    els.divider.style.left = px+'px';
+    // The clip is in the stage's own (unscaled) pixel space, so convert.
+    var local = (px - view.x)/view.scale;
+    els.mask.style.setProperty('--split', local+'px');
+  }
+}
+function fit(){
+  var vw = els.viewer.clientWidth, vh = els.viewer.clientHeight;
+  if(!view.w || !vw) return;
+  view.fitScale = Math.min(vw/view.w, vh/view.h);
+  view.scale = view.fitScale;
+  view.x = (vw - view.w*view.scale)/2;
+  view.y = (vh - view.h*view.scale)/2;
+  applyTransform();
+}
+els.viewer.addEventListener('wheel', function(e){
+  e.preventDefault();
+  var r = els.viewer.getBoundingClientRect();
+  var mx = e.clientX-r.left, my = e.clientY-r.top;
+  var f = e.deltaY < 0 ? 1.15 : 1/1.15;
+  var next = Math.max(view.fitScale*0.5, Math.min(view.fitScale*40, view.scale*f));
+  f = next/view.scale;
+  view.x = mx - (mx-view.x)*f;
+  view.y = my - (my-view.y)*f;
+  view.scale = next;
+  applyTransform();
+}, {passive:false});
+
+var drag = null;
+els.viewer.addEventListener('pointerdown', function(e){
+  if(e.target === els.divider) return;
+  drag = {x:e.clientX, y:e.clientY, ox:view.x, oy:view.y};
+  els.viewer.classList.add('dragging');
+  els.viewer.setPointerCapture(e.pointerId);
+});
+els.viewer.addEventListener('pointermove', function(e){
+  if(!drag) return;
+  view.x = drag.ox + (e.clientX-drag.x);
+  view.y = drag.oy + (e.clientY-drag.y);
+  applyTransform();
+});
+els.viewer.addEventListener('pointerup', function(){ drag=null; els.viewer.classList.remove('dragging'); });
+
+var dragDiv = false;
+els.divider.addEventListener('pointerdown', function(e){
+  dragDiv = true; e.stopPropagation(); els.divider.setPointerCapture(e.pointerId);
+});
+els.divider.addEventListener('pointermove', function(e){
+  if(!dragDiv) return;
+  var r = els.viewer.getBoundingClientRect();
+  view.split = Math.max(0, Math.min(1, (e.clientX-r.left)/r.width));
+  updateSplit();
+});
+els.divider.addEventListener('pointerup', function(){ dragDiv=false; });
+window.addEventListener('resize', function(){ fit(); });
+
+document.getElementById('modeToggle').addEventListener('click', function(e){
+  var b = e.target.closest('button'); if(!b) return;
+  [].forEach.call(this.querySelectorAll('button'), function(x){ x.classList.remove('active'); });
+  b.classList.add('active');
+  view.mode = b.dataset.mode;
+  updateSplit();
+});
+
+// ---------- UAVid gallery ----------
+function renderGallery(g){
+  var el = document.getElementById('gallery');
+  if(!g || !g.items || !g.items.length){
+    el.innerHTML = '<div class="gallery-empty"><div class="missing">'
+      + '<b>No semantic output yet.</b><p>Train the UAVid segmenter and build the gallery:</p>'
+      + '<p><code>python -m ml.prepare_uavid --frame-stride 2</code><br>'
+      + '<code>python -m ml.train_uavid</code><br>'
+      + '<code>python -m ml.make_semantic_gallery</code><br>'
+      + '<code>python build_static.py</code></p></div></div>';
+    return;
+  }
+  var base = dataUrl('semantic_gallery') + '/';
+  var has = function(k){ return g.items.some(function(it){ return it[k]; }); };
+  var rows = [['Frame','source']];
+  if(has('labels'))     rows.push(['Predicted labels','labels']);
+  if(has('overlay'))    rows.push(['Predicted overlay','overlay']);
+  if(has('gt'))         rows.push(['Ground truth','gt']);
+  if(has('gt_overlay')) rows.push(['Ground-truth overlay','gt_overlay']);
+
+  var n = g.items.length;
+  var html = '<div class="gallery-grid" style="grid-template-columns:auto repeat('+n+',minmax(240px,1fr))">';
+  rows.forEach(function(r){
+    html += '<div class="row-label">'+r[0]+'</div>';
+    g.items.forEach(function(it){
+      html += it[r[1]]
+        ? '<img loading="lazy" src="'+base+it[r[1]]+'" alt="'+r[0]+'">'
+        : '<div></div>';
+    });
+  });
+  html += '<div class="row-label"></div>';
+  g.items.forEach(function(it){ html += '<div class="frame-cap">'+esc(it.stem)+'</div>'; });
+  html += '</div>';
+
+  html += '<div class="legend-wrap">';
+  Object.keys(g.palette || {}).forEach(function(c){
+    html += '<span class="legend-item"><span class="swatch" style="background:rgb('+g.palette[c].join(',')+')"></span>'+esc(c)+'</span>';
+  });
+  html += '</div>';
+  var msg = g.has_predictions
+    ? (g.held_out
+        ? 'Frames are from UAVid\'s <b>validation split</b> — sequences the model never trained on. '
+          + 'Compare the predicted rows against ground truth to see where it is wrong.'
+        : '<b>Note:</b> the validation split was unavailable, so these frames come from the training set '
+          + 'and flatter the model. Rebuild once val has downloaded.')
+    : '<b>Ground truth only — the UAVid model has not finished training.</b> These are the dataset\'s own '
+      + 'hand-labelled masks in UAVid\'s palette, shown so the task and the 8 classes are visible now. '
+      + 'Predicted rows appear above these once training completes (it is queued behind the building '
+      + 'model on the single GPU).';
+  html += '<div class="note" style="margin-top:14px">' + msg + '</div>';
+  el.innerHTML = html;
+}
+
+document.getElementById('viewToggle').addEventListener('click', function(e){
+  var b = e.target.closest('button'); if(!b) return;
+  [].forEach.call(this.querySelectorAll('button'), function(x){ x.classList.remove('active'); });
+  b.classList.add('active');
+  var semantic = b.dataset.view === 'semantic';
+  document.getElementById('gallery').style.display = semantic ? 'block' : 'none';
+  els.viewer.style.display = semantic ? 'none' : 'block';
+  document.getElementById('modeToggle').style.display = semantic ? 'none' : 'flex';
+  if(!semantic) fit();
+});
+
+// ---------- sidebar ----------
+function curve(history){
+  if(!history || history.length < 2) return '';
+  var vals = history.map(function(h){ return h.val_iou !== undefined ? h.val_iou : h.val_miou; });
+  var w = 300, h = 78, pad = 8;
+  var max = Math.max.apply(null, vals), min = Math.min.apply(null, vals);
+  var span = (max-min) || 1;
+  var pts = vals.map(function(v,i){
+    var x = pad + i*(w-2*pad)/(vals.length-1);
+    var y = h-pad - (v-min)/span*(h-2*pad);
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  var best = Math.max.apply(null, vals);
+  return '<svg class="curve" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none">'
+    + '<polyline points="'+pts+'" fill="none" stroke="#45C7B8" stroke-width="1.8"/>'
+    + '<text x="'+(w-pad)+'" y="14" text-anchor="end" fill="#66796F" font-size="9" font-family="monospace">peak '+best.toFixed(3)+'</text>'
+    + '<text x="'+pad+'" y="'+(h-2)+'" fill="#66796F" font-size="9" font-family="monospace">epoch 0</text>'
+    + '<text x="'+(w-pad)+'" y="'+(h-2)+'" text-anchor="end" fill="#66796F" font-size="9" font-family="monospace">'+(vals.length-1)+'</text>'
+    + '</svg>';
+}
+
+function comparisonTable(cmp){
+  if(!cmp) return '';
+  var keys = Object.keys(cmp);
+  if(!keys.length) return '';
+  var best = keys.reduce(function(a,b){ return cmp[b].f1 > cmp[a].f1 ? b : a; });
+  var rows = keys.map(function(k){
+    var s = cmp[k];
+    return '<tr class="'+(k===best?'win':'')+'"><td>'+esc(k.split('(')[0].trim())+'</td>'
+      + '<td class="n">'+num(s.building_recall)+'</td>'
+      + '<td class="n">'+num(s.precision_in_colony)+'</td>'
+      + '<td class="n">'+num(s.f1)+'</td></tr>';
+  }).join('');
+  return '<h3 class="panel-title">Detector comparison</h3>'
+    + '<table class="cmp"><thead><tr><th>Detector</th><th>Recall</th><th>Precision</th><th>F1</th></tr></thead><tbody>'+rows+'</tbody></table>'
+    + '<div class="note">The RandomForest was <b>trained on these very buildings</b>, so its score is a best case it cannot repeat elsewhere. '
+    + 'The U-Net has never seen Igatpuri or India — its score is genuine zero-shot transfer. A close U-Net number is the better result, '
+    + 'because only one of the two can be moved to a new district.</div>';
+}
+
+function render(d){
+  var html = '';
+
+  if(!d.hasMask){
+    html += '<div><h3 class="panel-title">No model output yet</h3><div class="missing">'
+      + 'Train and run the building segmenter, then rebuild the static bundle:'
+      + '<p><code>python -m ml.prepare_inria</code><br><code>python -m ml.train_inria</code><br>'
+      + '<code>python -m ml.infer_buildings</code><br><code>python build_static.py</code></p></div></div>';
+    els.inspector.innerHTML = html;
+    els.statusChip.textContent = 'Awaiting model';
+    els.loading.style.display = 'none';
+    return;
+  }
+
+  var m = d.inria || {}, inf = d.inference || {};
+  var epochTxt = m.in_progress ? (m.epochs_done + ' / ' + m.epochs) : (m.epochs || '—');
+  html += '<div><h3 class="panel-title">Building segmenter'
+    + (m.in_progress ? '<span class="back">training…</span>' : '') + '</h3>'
+    + '<div class="stat-grid">'
+    + '<div class="stat-tile"><div class="num">'+num(m.best_val_iou)+'</div><div class="lbl">Val IoU (Inria)</div></div>'
+    + '<div class="stat-tile"><div class="num">'+(inf.predicted_buildings!=null?inf.predicted_buildings:'—')+'</div><div class="lbl">Footprints found</div></div>'
+    + '<div class="stat-tile"><div class="num">'+(inf.unrecorded_candidates!=null?inf.unrecorded_candidates:'—')+'</div><div class="lbl">Unrecorded</div></div>'
+    + '<div class="stat-tile"><div class="num">'+epochTxt+'</div><div class="lbl">Epochs</div></div>'
+    + '</div>';
+  if(m.in_progress){
+    html += '<div class="note" style="margin-top:12px">Training is still running, so the imagery and mask '
+      + 'below come from an earlier checkpoint. This panel refreshes on its own.</div>';
+  }
+  if(m.history) html += '<div style="margin-top:12px">'+curve(m.history)+'</div>';
+  html += '<div class="kv-grid">'
+    + '<div class="kv"><div class="k">Architecture</div><div class="v">U-Net · '+esc(m.encoder||'resnet34')+'</div></div>'
+    + '<div class="kv"><div class="k">Train patches</div><div class="v">'+(m.train_patches||'—')+'</div></div>'
+    + '<div class="kv"><div class="k">Inference GSD</div><div class="v">'+num(inf.inference_m_per_px,3)+' m/px</div></div>'
+    + '<div class="kv"><div class="k">Train time</div><div class="v">'+num(m.train_minutes,1)+' min</div></div>'
+    + '</div></div>';
+
+  html += '<div>' + comparisonTable(d.comparison) + '</div>';
+
+  html += '<div><h3 class="panel-title">How to read this</h3><div class="missing">'
+    + 'Ground truth comes from the <b>Inria Aerial Image Labeling</b> dataset — 0.3 m/px nadir orthoimagery with hand-digitised '
+    + 'footprints across five cities. The model never saw this AOI during training.'
+    + '<p>Esri carries real imagery here only to zoom 18 (0.56 m/px); zoom 19+ returns blank tiles. Inference therefore resamples '
+    + 'up to the 0.3 m/px the network trained at, and training deliberately degrades patches the same way so the two match.</p>'
+    + '</div></div>';
+
+  if(d.uavid){
+    var u = d.uavid, per = u.final_per_class_iou || {};
+    var pal = {'Clutter':[0,0,0],'Building':[128,0,0],'Road':[128,64,128],'Static Car':[192,0,192],
+               'Tree':[0,128,0],'Vegetation':[128,128,0],'Human':[64,64,0],'Moving Car':[64,0,128]};
+    var rows = Object.keys(per).map(function(c){
+      var rgb = pal[c]||[80,80,80];
+      return '<tr><td><span class="swatch" style="background:rgb('+rgb.join(',')+')"></span>'+esc(c)+'</td>'
+        + '<td class="n">'+num(per[c])+'</td></tr>';
+    }).join('');
+    html += '<div><h3 class="panel-title">Semantic segmenter (UAVid)</h3>'
+      + '<div class="stat-grid"><div class="stat-tile"><div class="num">'+num(u.best_val_miou)+'</div><div class="lbl">Val mIoU · 8 classes</div></div>'
+      + '<div class="stat-tile"><div class="num">'+(u.train_patches||'—')+'</div><div class="lbl">Train patches</div></div></div>'
+      + '<table class="cmp"><thead><tr><th>Class</th><th>IoU</th></tr></thead><tbody>'+rows+'</tbody></table>'
+      + '<div class="note">Trained on oblique 50 m-altitude drone video. It runs on the Upload page, not on this nadir '
+      + 'satellite mosaic — a model trained on one viewing geometry produces nonsense on the other.</div></div>';
+  }
+
+  els.inspector.innerHTML = html;
+  els.statusChip.textContent = m.in_progress
+    ? ('Training ' + m.epochs_done + '/' + m.epochs + ' · IoU ' + num(m.best_val_iou))
+    : ('IoU ' + num(m.best_val_iou));
+  els.gsdChip.textContent = inf.inference_m_per_px ? (num(inf.inference_m_per_px,2)+' m/px') : '';
+  els.loading.style.display = 'none';
+}
+
+var imagesLoaded = false;
+
+function load(){
+  return Promise.all([
+    headOk('building_mask_hard.png'),
+    getJson('inria_metrics.json'),
+    getJson('unet_inference.json'),
+    getJson('detector_comparison.json'),
+    getJson('uavid_metrics.json'),
+    getJson('semantic_gallery/gallery.json')
+  ]).then(function(r){
+    var d = {hasMask:r[0], inria:r[1], inference:r[2], comparison:r[3], uavid:r[4], gallery:r[5]};
+    renderGallery(d.gallery);
+    if(d.hasMask && !imagesLoaded){
+      imagesLoaded = true;
+      els.source.src = dataUrl('aoi_z18.jpg');
+      els.mask.src = dataUrl('building_mask_hard.png');
+      els.overlay.src = dataUrl('building_mask.png');
+      els.source.onload = function(){
+        view.w = els.source.naturalWidth; view.h = els.source.naturalHeight;
+        fit();
+      };
+    }
+    render(d);
+    return d;
+  });
+}
+
+// While a run is in progress the dev server serves data/models/*.json live, so
+// poll slowly to track it. Stops once nothing reports in_progress.
+(function poll(){
+  load().then(function(d){
+    var busy = (d.inria && d.inria.in_progress) || (d.uavid && d.uavid.in_progress)
+               || (d.gallery && !d.gallery.has_predictions);
+    if(busy) setTimeout(poll, 20000);
+  });
+})();
+})();
+</script>
+</body>
+</html>

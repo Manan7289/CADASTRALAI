@@ -1,0 +1,21 @@
+# DATASETS - DO NOT UPLOAD
+data/datasets/
+data/
+**/datasets/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+
+# Environment
+.env
+
+# Large generated files
+*.tif
+*.tiff
