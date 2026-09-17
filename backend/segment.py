@@ -21,8 +21,38 @@ from rasterio.warp import Resampling, transform_bounds
 import dtm as dtm_mod
 from export import utm_crs_for
 
-# CADASTRAAI_MODEL lets a dev run point at another checkpoint (e.g. the smoke-test weights)
-MODEL_PATH = Path(os.environ.get("CADASTRAAI_MODEL", Path(__file__).resolve().parent.parent / "models" / "unet_potsdam.pt"))
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+# Two checkpoints, chosen per survey. Numbers are the held-out results they were accepted on.
+MODELS = {
+    "aerial_dsm": {
+        "file": "unet_potsdam.pt",
+        "label": "Aerial ORI + DSM (trained on ISPRS Potsdam)",
+        "summary": "U-Net ResNet34, RGB + height. Potsdam test tiles: mIoU 0.723, building IoU 0.913.",
+        "limits": "Misses many plain grey concrete roofs in Indian settlements when used without a DSM.",
+    },
+    "indian_drone": {
+        "file": "unet_vijayawada_ft_v2.pt",
+        "label": "Indian drone imagery, colour only (Potsdam model fine-tuned on Vijayawada)",
+        "summary": "Held-out Singh Nagar block vs open footprints: building IoU 0.34 -> 0.77, footprints found 13 -> 36 of 49; OSM road pixels called building 6.6%.",
+        "limits": "Adjacent houses are often merged into one footprint; trees and low vegetation are under-detected.",
+    },
+}
+# CADASTRAAI_MODEL lets a dev run point every survey at another checkpoint (e.g. the smoke-test weights)
+_OVERRIDE = os.environ.get("CADASTRAAI_MODEL")
+MODEL_PATH = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS["aerial_dsm"]["file"]
+
+
+def choose_model(key, has_height):
+    """'auto' picks the height-trained model when the survey has a DSM, the
+    Indian fine-tune otherwise. Returns (key, path, info)."""
+    if key in (None, "", "auto"):
+        key = "aerial_dsm" if has_height else "indian_drone"
+    if key not in MODELS:
+        raise ValueError(f"Unknown model '{key}'.")
+    path = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS[key]["file"]
+    if not path.exists():
+        raise ValueError(f"Model file {path.name} is missing from models/.")
+    return key, path, MODELS[key]
 NDSM_SCALE_M = 30.0   # Potsdam's normalised DSM jpgs map 0..255 to roughly 0..30 m above ground
 _model_cache = {}
 
