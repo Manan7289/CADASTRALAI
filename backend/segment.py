@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import numpy as np
+from scipy import ndimage as ndi
 import rasterio
 import torch
 from rasterio.transform import from_origin
@@ -118,7 +119,12 @@ def load_survey(ori_path, dsm_path=None, dtm_path=None, ndsm_path=None, gsd_m=0.
         height_source = "DSM and DTM supplied"
     elif dsm_path:
         dsm = warp_to_grid(dsm_path, crs, transform, w, h, bands=[1])[0]
-        ndsm, _ = dtm_mod.ndsm_from_dsm(np.where(np.isfinite(dsm), dsm, np.nanmin(dsm)), gsd_m)
+        known = np.isfinite(dsm)
+        # fill nodata (e.g. the border outside the survey) with the nearest real surface value; filling
+        # with the minimum made the ground filter read every survey edge as a tall object
+        _, (iy, ix) = ndi.distance_transform_edt(~known, return_indices=True)
+        ndsm, _ = dtm_mod.ndsm_from_dsm(dsm[iy, ix], gsd_m)
+        ndsm[~known] = 0.0
         height_source = "DSM supplied, DTM derived by ground filter"
     if ndsm is not None:
         ndsm = np.clip(np.nan_to_num(ndsm), 0, NDSM_SCALE_M)
