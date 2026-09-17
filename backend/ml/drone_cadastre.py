@@ -76,50 +76,62 @@ def extract_drone_features(img_arr: np.ndarray, meters_per_px: float) -> Dict:
             if len(approx) >= 4:
                 buildings_px.append(approx)
 
-    # 4. Planar Graph & Watershed Parcel Delineation
-    # Combine road network + boundary walls to form the cadastral boundary partition
-    combined_dividers = cv2.bitwise_or(wall_mask, road_mask)
-    # Dilate dividers slightly to enforce clear separation
-    div_kernel = np.ones((3, 3), np.uint8)
-    combined_dividers = cv2.dilate(combined_dividers, div_kernel, iterations=1)
+    # 4. Straight-Line Cadastral Voronoi Partition for Uploaded Drone Imagery
+    # Voronoi tessellation clipped to ROI box and subtracting road network
+    bldg_pts = []
+    for approx in buildings_px:
+        M = cv2.moments(approx)
+        if M["m00"] > 0:
+            bldg_pts.append([M["m10"] / M["m00"], M["m01"] / M["m00"]])
 
-    # Invert to get parcel interiors
-    interiors = cv2.bitwise_not(combined_dividers)
-    # Distance transform creates distinct parcel peaks
-    dist = cv2.distanceTransform(interiors, cv2.DIST_L2, 5)
-    _, markers_seed = cv2.threshold(dist, 0.25 * dist.max(), 255, cv2.THRESH_BINARY)
-    markers_seed = markers_seed.astype(np.uint8)
-
-    # Connected components on interior seeds
-    num_markers, markers = cv2.connectedComponents(markers_seed)
-
-    # Watershed segmentation on inverse distance
-    # Convert image to 3-channel for cv2.watershed
-    ws_input = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    markers_ws = markers.copy().astype(np.int32)
-    cv2.watershed(ws_input, markers_ws)
-
-    # Extract distinct parcel polygons from watershed regions
     min_p_px = max(10, int(MIN_PARCEL_M2 / (meters_per_px ** 2)))
     max_p_px = max(min_p_px + 10, int(MAX_PARCEL_M2 / (meters_per_px ** 2)))
-
     parcels_px = []
-    unique_labels = np.unique(markers_ws)
-    for lbl in unique_labels:
-        if lbl <= 1:  # 0: boundary line, 1: background border
-            continue
-        p_mask = (markers_ws == lbl).astype(np.uint8) * 255
-        p_contours, _ = cv2.findContours(p_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for c in p_contours:
+
+    if len(bldg_pts) >= 3:
+        try:
+            pts_arr = np.array(bldg_pts)
+            margin = max(w, h) * 2
+            outer_pts = np.array([
+                [-margin, -margin], [-margin, h+margin], [w+margin, -margin], [w+margin, h+margin],
+                [-margin, h/2], [w+margin, h/2], [w/2, -margin], [w/2, h+margin]
+            ])
+            all_pts = np.vstack([pts_arr, outer_pts])
+            vor = Voronoi(all_pts)
+            roi_box = box(0, 0, w, h)
+
+            for i in range(len(bldg_pts)):
+                r_idx = vor.point_region[i]
+                reg = vor.regions[r_idx]
+                if not reg or -1 in reg: continue
+                pts = [vor.vertices[v] for v in reg]
+                if len(pts) < 3: continue
+                v_poly = Polygon(pts)
+                if not v_poly.is_valid: v_poly = v_poly.buffer(0)
+                clipped = v_poly.intersection(roi_box)
+                if clipped.is_empty: continue
+                if isinstance(clipped, MultiPolygon):
+                    clipped = max(clipped.geoms, key=lambda p: p.area)
+                # Simplify to straight cadastral lines
+                simplified = clipped.simplify(3.5, preserve_topology=True)
+                if simplified.is_valid and not simplified.is_empty:
+                    coords = np.array(simplified.exterior.coords, dtype=np.int32)
+                    if len(coords) >= 3:
+                        parcels_px.append(coords)
+        except Exception as err:
+            print(f"[drone_cadastre] Voronoi fallback: {err}")
+
+    if len(parcels_px) < 3:
+        combined_dividers = cv2.bitwise_or(wall_mask, road_mask)
+        interiors = cv2.bitwise_not(combined_dividers)
+        inter_contours, _ = cv2.findContours(interiors, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for c in inter_contours:
             a = cv2.contourArea(c)
             if min_p_px <= a <= max_p_px:
-                eps = 0.015 * cv2.arcLength(c, True)
+                eps = 0.02 * cv2.arcLength(c, True)
                 approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
                 if len(approx) >= 3:
                     parcels_px.append(approx)
-
-    # Fallback / Boundary partitioning if watershed produced too few plots
-    if len(parcels_px) < 3:
         # Contour extraction on interior spaces
         inter_contours, _ = cv2.findContours(interiors, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for c in inter_contours:
