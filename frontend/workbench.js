@@ -458,6 +458,9 @@ function renderTabs() {
   body.innerHTML = renderer();
   wireTab(body);
   if (TAB_WIRERS[state.tab]) TAB_WIRERS[state.tab](body);
+  if (state.tab === 'review' && state.selected.length === 1 && $('parcelExtras')) {
+    document.dispatchEvent(new CustomEvent('wb:parcel-detail', {detail: {id: state.selected[0], el: $('parcelExtras')}}));
+  }
 }
 
 function overviewHtml() {
@@ -553,7 +556,8 @@ function parcelDetailHtml(f) {
     '<div class="note">' + confidenceNote(p) + '</div></div>' +
     (issues.length ? '<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">' + issues.map(issueHtml).join('') + '</div>' : '') +
     statusButtons() +
-    '<div class="btn-row" style="margin-top:8px"><button class="btn" data-act="edit">Edit boundary</button><button class="btn" data-act="zoom">Zoom to</button></div></div>';
+    '<div class="btn-row" style="margin-top:8px"><button class="btn" data-act="edit">Edit boundary</button><button class="btn" data-act="zoom">Zoom to</button></div>' +
+    '<div id="parcelExtras"></div></div>';
 }
 
 function confidenceNote(p) {
