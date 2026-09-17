@@ -27,7 +27,7 @@ import subprocess
 import sys
 import time
 
-SMOKE = False
+SMOKE = True
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "segmentation-models-pytorch==0.5.0"], check=True)
 
@@ -56,7 +56,7 @@ CROP, BATCH_P, BATCH_V = 512, 6, 6
 EPOCHS = 1 if SMOKE else 14
 ITERS = 5 if SMOKE else 200
 LR = 1e-4
-NEG_WEIGHT = 0.5
+NEG_WEIGHT = 1.0
 HEIGHT_DROPOUT = 0.5
 POTSDAM_TRAIN_TILES = 2 if SMOKE else 14
 POTSDAM_TEST_TILES = 1 if SMOKE else 6
@@ -198,6 +198,8 @@ def eval_holdout(model, image=None, label=None):
     m = hold_lab_ != 255
     t, p = hold_lab_[m] == 1, pred_b[m]
     tp, fp, fn = int((t & p).sum()), int((~t & p).sum()), int((t & ~p).sum())
+    road = hold_lab_ == 2
+    notb = hold_lab_ == 0
     iou = tp / max(tp + fp + fn, 1)
     f1 = 2 * tp / max(2 * tp + fp + fn, 1)
     # footprint-level: a labelled building counts as found if >=50% of its core pixels are predicted building
@@ -207,11 +209,16 @@ def eval_holdout(model, image=None, label=None):
             "pixel_precision_vs_open_footprints": round(tp / max(tp + fp, 1), 4),
             "pixel_recall": round(tp / max(tp + fn, 1), 4),
             "footprints_found": found, "footprints_total": n, "footprint_recall": round(found / max(n, 1), 4),
-            "predicted_building_fraction": round(float(pred_b.mean()), 4)}, pred_b
+            "predicted_building_fraction_labelled": round(float(p.mean()), 4),
+            "label_building_fraction_labelled": round(float(t.mean()), 4),
+            "osm_road_pixels_predicted_building": round(float(pred_b[road].mean()), 4) if road.any() else None,
+            "not_building_pixels_predicted_building": round(float(pred_b[notb].mean()), 4) if notb.any() else None}, pred_b
 
 
 def eval_val(model):
-    """Pooled building F1 over the validation tiles (used only to pick the checkpoint)."""
+    """Pooled building F1 over the validation tiles (used only to pick the checkpoint).
+    OSM road / not-building pixels count as negatives, so painting lanes as
+    building lowers this score."""
     tp = fp = fn = 0
     for img, lab_ in vj_val:
         xz = np.dstack([img, np.zeros(img.shape[:2], np.uint8)])
@@ -258,9 +265,10 @@ for epoch in range(EPOCHS):
             logp = torch.log_softmax(logits[BATCH_P:].float(), 1)
             log_b = logp[:, 1]
             log_not_b = torch.log1p(-log_b.exp().clamp(max=1 - 1e-6))
-            valid = yv != 255
-            pos, neg = valid & (yv == 1), valid & (yv == 0)
-            lvj = -(log_b[pos].sum() + NEG_WEIGHT * log_not_b[neg].sum()) / max(1, int(pos.sum() + NEG_WEIGHT * neg.sum()))
+            pos, neg, road = yv == 1, yv == 0, yv == 2
+            # buildings -> building class; OSM roads/lanes -> road class; everything else labelled -> "not building"
+            lvj = -(log_b[pos].sum() + logp[:, 2][road].sum() + NEG_WEIGHT * log_not_b[neg].sum()) / \
+                max(1, int(pos.sum() + road.sum() + NEG_WEIGHT * neg.sum()))
             loss = lpots + lvj
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
@@ -291,7 +299,7 @@ metrics = {
     "potsdam_test_after_with_height": eval_potsdam(model, False),
     "potsdam_test_after_rgb_only": eval_potsdam(model, True),
     "val_building_f1_best": best,
-    "note": "Checkpoint chosen on 12 separate Vijayawada validation tiles; the demo block is scored only before and after. Open footprints miss some real buildings, so precision here is a lower bound.",
+    "note": "Checkpoint chosen on 12 separate Vijayawada validation tiles; the demo block is scored only before and after. Negatives include OSM roads/lanes and land outside dilated footprints. Open footprints miss some buildings and merge neighbours, so treat pixel metrics as indicative and always check holdout_compare.jpg.",
     "history": history, "train_minutes": round((time.time() - start) / 60, 1),
 }
 json.dump(metrics, open(os.path.join(OUT, "metrics.json"), "w"), indent=2)
