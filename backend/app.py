@@ -13,6 +13,7 @@ Vercel deployment.
 Run order (fixed demo AOI): fetch_data.py -> fetch_imagery.py -> model.py -> build_static.py -> app.py
 Run order (your own upload): just app.py, then use the Upload page.
 """
+import json
 import traceback
 import uuid
 from pathlib import Path
@@ -20,6 +21,7 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
+import drone_utils
 import upload_pipeline
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -57,6 +59,49 @@ def api_process():
         return jsonify({"error": f"Processing failed: {e}"}), 500
 
     return jsonify(result)
+
+
+@app.route("/api/inspect_drone", methods=["POST"])
+def api_inspect_drone():
+    file = request.files.get("file")
+    if file is None or file.filename == "":
+        return jsonify({"error": "No file provided."}), 400
+    RAW_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = RAW_UPLOADS_DIR / ("inspect_" + secure_filename(file.filename))
+    file.save(tmp_path)
+    try:
+        exif = drone_utils.extract_drone_exif(tmp_path)
+        return jsonify(exif)
+    except Exception as e:
+        return jsonify({"has_gps": False, "error": str(e)})
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+
+@app.route("/property_card/<int:parcel_id>")
+def serve_default_property_card(parcel_id):
+    p_path = FRONTEND_DIR / "data" / "property_cards.json"
+    if not p_path.exists():
+        p_path = BASE_DIR / "data" / "processed" / "property_cards.json"
+    if p_path.exists():
+        cards = json.loads(p_path.read_text(encoding="utf-8"))
+        if str(parcel_id) in cards:
+            return cards[str(parcel_id)]
+    return "Property Card not found. Run build_static.py first.", 404
+
+
+@app.route("/uploads/<session_id>/property_card/<int:parcel_id>")
+def serve_session_property_card(session_id, parcel_id):
+    p_path = UPLOADS_DIR / secure_filename(session_id) / "property_cards.json"
+    if p_path.exists():
+        cards = json.loads(p_path.read_text(encoding="utf-8"))
+        if str(parcel_id) in cards:
+            return cards[str(parcel_id)]
+    return "Property Card not found for this session.", 404
 
 
 @app.route("/uploads/<session_id>/<path:filename>")

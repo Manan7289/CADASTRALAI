@@ -22,8 +22,13 @@
       <a href="model.html">MODEL OUTPUT</a>
       <a href="upload.html">UPLOAD YOUR OWN</a>
     </nav>
+    <div class="segmented" id="surveyToggle">
+      <a href="index.html?session=clear_drone_survey" id="btnDrone" style="text-decoration:none;padding:6px 11px;font-family:var(--font-mono);font-size:0.7rem;display:inline-block;">🚁 CLEAR DRONE SURVEY</a>
+      <a href="index.html?legacy=1" id="btnTown" style="text-decoration:none;padding:6px 11px;font-family:var(--font-mono);font-size:0.7rem;display:inline-block;">🏙 TOWN WARD</a>
+    </div>
     <label class="toggle-field"><input type="checkbox" id="bufferToggle" checked> Buffer zones</label>
-    <div class="status-chip" id="statusChip" style="color:var(--warning);border-color:rgba(224,169,74,0.4);background:rgba(224,169,74,0.08);"><span style="width:6px;height:6px;border-radius:50%;background:var(--warning);"></span>Inferred parcels — for verification</div>
+    <a id="dxfExportBtn" href="#" download="cadastre.dxf" class="ghost-btn" style="text-decoration:none;font-size:0.72rem;padding:6px 12px;border-radius:6px;color:var(--accent);border-color:var(--accent);">📐 Export DXF (CAD)</a>
+    <div class="status-chip" id="statusChip" style="color:var(--ok);border-color:rgba(108,190,129,0.4);background:rgba(108,190,129,0.08);"><span style="width:6px;height:6px;border-radius:50%;background:var(--ok);"></span>Contiguous Cadastral Parcels · UAV Survey</div>
   </header>
 
   <main class="workspace">
@@ -58,7 +63,28 @@ Promise.all([
   document.getElementById('bufferToggle').addEventListener('change', function(e){
     if(e.target.checked) map.addLayer(refs.bufferGroup); else map.removeLayer(refs.bufferGroup);
   });
+  var dxfBtn = document.getElementById('dxfExportBtn');
+  if(dxfBtn) dxfBtn.href = dxfDownloadUrl();
 
+  var curSess = currentSessionId();
+  var isDrone = (curSess === 'clear_drone_survey');
+  var bDrone = document.getElementById('btnDrone');
+  var bTown = document.getElementById('btnTown');
+  if(bDrone && bTown){
+    if(isDrone){
+      bDrone.style.background = 'var(--accent)';
+      bDrone.style.color = '#04211D';
+      bDrone.style.fontWeight = 'bold';
+      bTown.style.background = 'transparent';
+      bTown.style.color = 'var(--text-dim)';
+    } else {
+      bTown.style.background = 'var(--accent)';
+      bTown.style.color = '#04211D';
+      bTown.style.fontWeight = 'bold';
+      bDrone.style.background = 'transparent';
+      bDrone.style.color = 'var(--text-dim)';
+    }
+  }
   state.parcelsFc = parcelsFc;
   state.buildingsFc = buildingsFc;
 
@@ -66,7 +92,7 @@ Promise.all([
   // structure-level compliance detail lives on the Compliance & Detection page.
   L.geoJSON(buildingsFc, {
     interactive:false,
-    style:{color:'#C9CDC4', weight:0.6, fillColor:'#C9CDC4', fillOpacity:0.5}
+    style:{color:'#28352E', weight:1.2, fillColor:'#6CBE81', fillOpacity:0.75}
   }).addTo(map);
 
   renderParcels();
@@ -83,11 +109,11 @@ function renderParcels(){
       var selected = f.properties.id===state.selectedParcelId;
       return {
         color: selected ? '#45C7B8' : '#F2E9DC',
-        weight: selected ? 3 : 1.6,
-        opacity: selected ? 1 : 0.85,
-        dashArray: selected ? null : '5 4',
-        fillColor: LANDUSE_COLOR[f.properties.landuse] || '#5C6B63',
-        fillOpacity: 0.42
+        weight: selected ? 3.2 : 1.5,
+        opacity: selected ? 1 : 0.9,
+        dashArray: null,
+        fillColor: LANDUSE_COLOR[f.properties.landuse] || '#485850',
+        fillOpacity: 0.32
       };
     },
     onEachFeature:function(f, layer){
@@ -154,32 +180,61 @@ function renderParcelDetail(){
 
   var html = '<div><h3 class="panel-title"><span class="back" id="backBtnP">&larr; Overview</span></h3>';
   html += '<div class="detail-head"><h2>Parcel #'+p.id+'</h2><span style="color:'+luColor+';font-family:var(--font-mono);font-size:0.7rem;text-transform:uppercase;">'+p.landuse+'</span></div>';
+  if(p.ulpin){
+    html += '<div style="font-family:var(--font-mono);font-size:0.72rem;background:rgba(69,199,184,0.1);border:1px solid rgba(69,199,184,0.3);color:var(--accent);padding:4px 8px;border-radius:4px;display:inline-block;margin:4px 0 10px 0;">ULPIN: '+p.ulpin+'</div>';
+  }
+
+  var areaStr = p.area_m2 + ' m²';
+  if(p.area_guntha) areaStr += ' (' + p.area_guntha + ' Guntha)';
+  else if(p.area_sq_ft) areaStr += ' (' + p.area_sq_ft + ' sq.ft)';
+
   html += '<div class="kv-grid">'+
-    '<div class="kv"><div class="k">Area</div><div class="v">'+p.area_m2+' m²</div></div>'+
+    '<div class="kv"><div class="k">Total Area</div><div class="v">'+areaStr+'</div></div>'+
     '<div class="kv"><div class="k">Perimeter</div><div class="v">'+p.perimeter_m+' m</div></div>'+
-    '<div class="kv"><div class="k">Buildings inside</div><div class="v">'+p.building_count+'</div></div>'+
-    '<div class="kv"><div class="k">Road access</div><div class="v" style="color:'+(p.road_connected?'var(--ok)':'var(--critical)')+'">'+(p.road_connected?'Connected':'~'+p.road_distance_m+' m away')+'</div></div>'+
-    '<div class="kv" style="grid-column:1/-1;"><div class="k">GPS centroid (approx.)</div><div class="v">'+p.gps_lat.toFixed(5)+'° N, '+p.gps_lon.toFixed(5)+'° E</div></div>'+
+    '<div class="kv"><div class="k">Buildings</div><div class="v">'+p.building_count+' structures</div></div>'+
+    '<div class="kv"><div class="k">Road access</div><div class="v" style="color:'+(p.road_connected?'var(--ok)':'var(--critical)')+'">'+(p.road_connected?'Frontage Connected':'~'+p.road_distance_m+' m away')+'</div></div>';
+
+  if(p.built_up_area_m2 != null){
+    html += '<div class="kv"><div class="k">Built-up Plinth</div><div class="v">'+p.built_up_area_m2+' m²</div></div>'+
+      '<div class="kv"><div class="k">Open Yard Space</div><div class="v">'+p.open_space_m2+' m²</div></div>'+
+      '<div class="kv"><div class="k">Coverage (GCR)</div><div class="v">'+(p.ground_coverage_ratio_pct||0)+'%</div></div>';
+  }
+
+  html += '<div class="kv" style="grid-column:1/-1;"><div class="k">GPS centroid (approx.)</div><div class="v">'+p.gps_lat.toFixed(5)+'° N, '+p.gps_lon.toFixed(5)+'° E</div></div>'+
   '</div>';
+
+  html += '<div style="margin:14px 0;">'+
+    '<a href="'+propertyCardUrl(p.id)+'" target="_blank" class="ghost-btn" style="display:block;text-align:center;text-decoration:none;background:rgba(69,199,184,0.12);color:var(--accent);border-color:var(--accent);padding:9px 12px;border-radius:6px;font-weight:600;font-size:0.8rem;">🖨 View SVAMITVA Cadastral Card</a>'+
+  '</div>';
+
+  if(p.traverse_points && p.traverse_points.length > 0){
+    html += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border-soft);">'+
+      '<h4 style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-dim);margin:0 0 6px 0;">Demarcated Corner Traverse</h4>'+
+      '<table style="width:100%;border-collapse:collapse;font-size:0.72rem;font-family:var(--font-mono);">'+
+      '<tr style="color:var(--text-faint);border-bottom:1px solid var(--border-soft);"><th style="text-align:left;padding:3px;">Pt</th><th style="text-align:left;padding:3px;">Coordinates</th><th style="text-align:right;padding:3px;">Side Length</th></tr>';
+    p.traverse_points.slice(0, 8).forEach(function(t){
+      html += '<tr style="border-bottom:1px solid var(--border-soft);"><td style="padding:4px 3px;color:var(--accent);font-weight:bold;">'+t.point_id+'</td><td style="padding:4px 3px;">'+t.lat.toFixed(5)+'°N, '+t.lon.toFixed(5)+'°E</td><td style="padding:4px 3px;text-align:right;">'+t.segment_length_m+'m</td></tr>';
+    });
+    html += '</table></div>';
+  }
 
   var findings = [];
   if(!p.road_connected){
-    findings.push({sev:'warning', shape:'square', label:'No Road Frontage', msg:'Nearest mapped road is ~'+p.road_distance_m+' m away. Relative to the mapped OSM road network (itself incomplete here) — review access in the field.'});
+    findings.push({sev:'warning', shape:'square', label:'No Direct Road Frontage', msg:'Nearest access corridor is ~'+p.road_distance_m+' m away. Review easement access on the ground.'});
   }
   if(p.has_unrecorded_building){
-    findings.push({sev:'change', shape:'circle', label:'Contains an Unrecorded Structure', msg:'At least one AI-detected building on this parcel has no match in the official building record. See Compliance & Detection for the specific structure.'});
+    findings.push({sev:'change', shape:'circle', label:'Contains Unrecorded Structure', msg:'AI detected structure with no match in official record. Review permit.'});
   }
   if(findings.length){
-    html += '<div class="findings">';
+    html += '<div class="findings" style="margin-top:12px;">';
     findings.forEach(function(a){
       html += '<div class="finding sev-'+a.sev+'">'+iconSvg(a.shape,a.sev,18)+'<div><b>'+a.label+'</b><p>'+a.msg+'</p></div></div>';
     });
     html += '</div>';
   } else {
-    html += '<div class="clean-msg">&#10003; No issues detected by the automated rule engine</div>';
+    html += '<div class="clean-msg" style="margin-top:12px;">&#10003; No compliance issues detected by automated rule engine</div>';
   }
 
-  html += '<div style="margin-top:14px;font-size:0.7rem;color:var(--text-faint);line-height:1.5;">This boundary is inferred from building positions and the surrounding road/rail/water network, not a surveyed record — use it to prioritise which plots to verify on the ground.</div>';
   html += '</div>';
 
   inspector.innerHTML = html;

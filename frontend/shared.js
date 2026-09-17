@@ -8,9 +8,12 @@ var ALERT_META = {
 };
 var SEV_COLOR = {critical:'#E2685F', warning:'#E0A94A', change:'#B694DA', ok:'#6CBE81'};
 var LANDUSE_COLOR = {
-  'Residential':'#7C9BA6', 'Government':'#E0A94A', 'Agricultural':'#8FAE5D',
-  'Forest / Green Land':'#5FA37A', 'Industrial':'#B08D6B', 'Commercial':'#6E8FB0',
-  'Vacant / Unclassified':'#5C6B63'
+  'Residential':'#7C9BA6', 'Residential / Built-up':'#4EA195',
+  'Commercial / Retail Complex':'#E0A94A', 'Commercial':'#6E8FB0',
+  'Government':'#E0A94A', 'Agricultural':'#8FAE5D',
+  'Forest / Green Land':'#5FA37A', 'Industrial':'#B08D6B',
+  'Transport & Highway Corridor':'#556872',
+  'Vacant / Unclassified':'#485850', 'Vacant Plot / Open Land':'#485850'
 };
 
 function shapePath(shape, cx, cy, r){
@@ -36,11 +39,30 @@ function iconSvg(shape, sev, size){
 // If the page was opened as ?session=<id> (from the Upload page), fetch that
 // upload's own generated data instead of the fixed demo bundle under data/.
 function dataUrl(name){
-  var session = new URLSearchParams(location.search).get('session');
-  return session ? 'uploads/' + session + '/' + name : 'data/' + name;
+  var params = new URLSearchParams(location.search);
+  var session = params.get('session');
+  if(!session && !params.has('legacy')){
+    session = 'clear_drone_survey';
+  }
+  return session ? '/uploads/' + session + '/' + name : '/data/' + name;
 }
 function currentSessionId(){
-  return new URLSearchParams(location.search).get('session');
+  var params = new URLSearchParams(location.search);
+  var session = params.get('session');
+  if(!session && !params.has('legacy')){
+    return 'clear_drone_survey';
+  }
+  return session;
+}
+
+function propertyCardUrl(parcelId){
+  var session = currentSessionId();
+  return session ? '/uploads/' + session + '/property_card/' + parcelId : '/property_card/' + parcelId;
+}
+
+function dxfDownloadUrl(){
+  var session = currentSessionId();
+  return session ? '/uploads/' + session + '/cadastre.dxf' : '/data/cadastre.dxf';
 }
 
 function initMap(){
@@ -52,16 +74,13 @@ function loadBaseLayers(map, meta, imgBlob, layers){
   var bounds = [[geo.lat_se, geo.lon_nw],[geo.lat_nw, geo.lon_se]];
 
   var imgUrl = URL.createObjectURL(imgBlob);
-  L.imageOverlay(imgUrl, bounds, {attribution:'Esri World Imagery (stitched offline mosaic)'}).addTo(map);
+  L.imageOverlay(imgUrl, bounds, {attribution:'CadastraAI Drone Imagery / Orthomosaic'}).addTo(map);
   map.invalidateSize();
   map.fitBounds(bounds);
   window.addEventListener('resize', function(){ map.invalidateSize(); });
 
   var osmTiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; OpenStreetMap contributors'});
 
-  // The U-Net's raw pixel mask, if ml.infer_buildings has been run. It is the
-  // layer the vectorised footprints are derived from, so having it toggleable
-  // next to them is what makes a wrong polygon diagnosable.
   var overlayLayers = null;
   if (meta.mask_image) {
     var mg = meta.mask_image;
@@ -71,25 +90,47 @@ function loadBaseLayers(map, meta, imgBlob, layers){
         {opacity:0.75, attribution:'U-Net trained on Inria Aerial Image Labeling'})
     };
   }
-  L.control.layers({'Offline satellite mosaic': L.layerGroup(), 'Live OSM tiles (needs internet)': osmTiles}, overlayLayers, {position:'bottomleft'}).addTo(map);
+  L.control.layers({'High-Res Drone Ortho': L.layerGroup(), 'Live OSM tiles (internet)': osmTiles}, overlayLayers, {position:'bottomleft'}).addTo(map);
 
   var refLayerGroup = L.layerGroup().addTo(map);
   function addRef(fc, color, weight, dash){
-    L.geoJSON(fc, {style:{color:color, weight:weight, dashArray:dash, fillOpacity:0.12}}).addTo(refLayerGroup);
+    if(fc && fc.features && fc.features.length > 0){
+      L.geoJSON(fc, {style:{color:color, weight:weight, dashArray:dash, fillOpacity:0.12}}).addTo(refLayerGroup);
+    }
   }
   addRef(layers.roads, '#4E5C52', 2, null);
   addRef(layers.railway, '#8A7A5A', 3, '1 4');
   addRef(layers.waterway, '#3E7A98', 2, null);
-  L.geoJSON(layers.government, {
-    style:{color:'#E0A94A', weight:1.5, fillOpacity:0.18, fillColor:'#E0A94A'},
-    pointToLayer:function(f, latlng){ return L.circleMarker(latlng, {radius:6, color:'#E0A94A', fillColor:'#E0A94A', fillOpacity:0.6}); }
-  }).addTo(refLayerGroup);
 
-  // buffer zones: real geometry buffered client-side would need turf, so this approximates
-  // the 30m/15m legal buffers visually with a fixed-width translucent halo along rail/water.
+  // Drone extracted boundary walls & fences
+  if(layers.extracted_walls && layers.extracted_walls.features && layers.extracted_walls.features.length > 0){
+    L.geoJSON(layers.extracted_walls, {
+      style:{color:'#B694DA', weight:2.5, opacity:0.85, dashArray:'4 3'}
+    }).addTo(refLayerGroup);
+  }
+
+  // Drone extracted road corridors
+  if(layers.extracted_roads && layers.extracted_roads.features && layers.extracted_roads.features.length > 0){
+    L.geoJSON(layers.extracted_roads, {
+      style:{color:'#8A9A86', weight:3, opacity:0.75}
+    }).addTo(refLayerGroup);
+  }
+
+  if(layers.government && layers.government.features && layers.government.features.length > 0){
+    L.geoJSON(layers.government, {
+      style:{color:'#E0A94A', weight:1.5, fillOpacity:0.18, fillColor:'#E0A94A'},
+      pointToLayer:function(f, latlng){ return L.circleMarker(latlng, {radius:6, color:'#E0A94A', fillColor:'#E0A94A', fillOpacity:0.6}); }
+    }).addTo(refLayerGroup);
+  }
+
+  // buffer zones
   var bufferGroup = L.layerGroup().addTo(map);
-  L.geoJSON(layers.railway, {style:{color:'#E2685F', weight:26, opacity:0.10}}).addTo(bufferGroup);
-  L.geoJSON(layers.waterway, {style:{color:'#E2685F', weight:14, opacity:0.10}}).addTo(bufferGroup);
+  if(layers.railway && layers.railway.features) {
+    L.geoJSON(layers.railway, {style:{color:'#E2685F', weight:26, opacity:0.10}}).addTo(bufferGroup);
+  }
+  if(layers.waterway && layers.waterway.features) {
+    L.geoJSON(layers.waterway, {style:{color:'#E2685F', weight:14, opacity:0.10}}).addTo(bufferGroup);
+  }
 
   return {refLayerGroup: refLayerGroup, bufferGroup: bufferGroup};
 }

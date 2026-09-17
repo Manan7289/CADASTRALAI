@@ -77,7 +77,11 @@ def main():
     shutil.copy(PROC_DIR / "model_metrics.json", OUT_DIR / "metrics.json")
     shutil.copy(PROC_DIR / "aoi_image.png", OUT_DIR / "image.png")
     shutil.copy(PROC_DIR / "parcels.geojson", OUT_DIR / "parcels.geojson")
-    print("  copied osm_buildings.geojson, metrics.json, image.png, parcels.geojson")
+    if (PROC_DIR / "property_cards.json").exists():
+        shutil.copy(PROC_DIR / "property_cards.json", OUT_DIR / "property_cards.json")
+    if (PROC_DIR / "cadastre.dxf").exists():
+        shutil.copy(PROC_DIR / "cadastre.dxf", OUT_DIR / "cadastre.dxf")
+    print("  copied osm_buildings.geojson, metrics.json, image.png, parcels.geojson, property_cards.json, cadastre.dxf")
 
     # Outputs of the U-Net pipeline under ml/. Optional on purpose: the project
     # still builds and deploys from the RandomForest path alone if nobody has

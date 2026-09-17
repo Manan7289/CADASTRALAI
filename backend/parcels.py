@@ -53,6 +53,7 @@ from shapely.geometry import shape, Polygon, box, mapping
 from shapely.ops import unary_union
 
 from geo_utils import LocalProjection, load_geojson
+import cadastral_standards
 
 PROC_DIR = Path(__file__).resolve().parent.parent / "data" / "processed"
 
@@ -233,15 +234,19 @@ def build_parcels_from_data(aoi_geo, buildings_fc, roads_fc, rail_fc, water_fc, 
             pts = np.array([[b["centroid"].x, b["centroid"].y] for b in in_block])
             raw_cells = bounded_voronoi_cells(pts, block)
             for b, raw_cell in zip(in_block, raw_cells):
-                # cap the raw Voronoi cell to this building's own footprint + a
-                # yard/setback margin, so an isolated building doesn't inherit
-                # the whole surrounding empty block as its "plot"
-                plot_bound = b["geom"].buffer(PLOT_SETBACK_M, join_style=2)
-                capped = raw_cell.intersection(plot_bound)
-                if capped.geom_type == "MultiPolygon":
-                    capped = max(capped.geoms, key=lambda g: g.area) if capped.geoms else Polygon()
-                if not capped.is_empty:
-                    cells_with_members.append((capped, [b]))
+                # In true cadastral mapping, parcels tile the land seamlessly to the street
+                # edge and neighboring plot boundaries. Only an oversized rural cell (>2500 m2)
+                # is capped so the remainder can be classified as agricultural/vacant land.
+                if raw_cell.area > 2500.0:
+                    plot_bound = b["geom"].buffer(35.0, join_style=2)
+                    cell = raw_cell.intersection(plot_bound)
+                else:
+                    cell = raw_cell
+
+                if cell.geom_type == "MultiPolygon":
+                    cell = max(cell.geoms, key=lambda g: g.area) if cell.geoms else Polygon()
+                if not cell.is_empty and cell.area >= MIN_PARCEL_M2:
+                    cells_with_members.append((cell, [b]))
 
         # land left over in this block once every building's plot is capped
         # becomes its own separate vacant/unbuilt parcel -- not absorbed into
@@ -288,19 +293,32 @@ def build_parcels_from_data(aoi_geo, buildings_fc, roads_fc, rail_fc, water_fc, 
             gps = proj.inv(centroid_local.x, centroid_local.y)
             cell_lonlat = proj.to_lonlat(cell)
 
+            ulpin = cadastral_standards.generate_ulpin(gps[1], gps[0], pid)
+            traverse = cadastral_standards.extract_traverse_points(cell_lonlat)
+            built_area = round(sum(b["geom"].area for b in member_buildings), 1)
+            open_space = round(max(0.0, cell.area - built_area), 1)
+            gcr_pct = round((built_area / cell.area) * 100.0, 1) if cell.area > 0 else 0.0
+
             parcels.append({
                 "id": pid,
+                "ulpin": ulpin,
                 "geometry": mapping(cell_lonlat),
                 "area_m2": round(cell.area, 1),
+                "area_sq_ft": round(cell.area * 10.7639, 1),
+                "area_guntha": round(cell.area / 101.17, 3),
                 "perimeter_m": round(cell.length, 1),
                 "landuse": landuse,
                 "building_count": len(member_buildings),
                 "building_ids": [b["id"] for b in member_buildings],
+                "built_up_area_m2": built_area,
+                "open_space_m2": open_space,
+                "ground_coverage_ratio_pct": gcr_pct,
                 "has_unrecorded_building": any_unrecorded,
                 "road_connected": bool(connected),
                 "road_distance_m": round(road_dist, 1) if road_dist is not None else None,
                 "gps_lat": round(gps[1], 6),
                 "gps_lon": round(gps[0], 6),
+                "traverse_points": traverse,
             })
             pid += 1
 
@@ -318,6 +336,21 @@ def main():
     }
     out_path = PROC_DIR / "parcels.geojson"
     out_path.write_text(json.dumps(fc), encoding="utf-8")
+
+    # Generate Property Cards and DXF export for the demo AOI
+    bldgs_fc = json.loads((PROC_DIR / "extracted_buildings.geojson").read_text(encoding="utf-8"))
+    try:
+        cadastral_standards.export_cadastral_dxf(fc, bldgs_fc, PROC_DIR / "cadastre.dxf")
+    except Exception as e:
+        print(f"  DXF export note: {e}")
+
+    property_cards = {}
+    for p in parcels:
+        geom = shape(p["geometry"])
+        card_html = cadastral_standards.generate_cadastral_property_card(p, geom, [], aoi_name="Igatpuri Cadastral Survey")
+        property_cards[str(p["id"])] = card_html
+    (PROC_DIR / "property_cards.json").write_text(json.dumps(property_cards), encoding="utf-8")
+
     n_connected = sum(1 for p in parcels if p["road_connected"])
     print(f"{len(parcels)} parcels delineated -> {out_path}")
     print(f"  {n_connected}/{len(parcels)} have road frontage within {ROAD_CONNECT_M} m")
