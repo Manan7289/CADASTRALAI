@@ -106,8 +106,12 @@ def classify_buildings(bldg_contours):
 
     with open(MODEL_PATH, "rb") as f:
         obj = pickle.load(f)
-    pipe      = obj["pipeline"]
-    label_map = obj["label_map"]
+    if isinstance(obj, dict):
+        pipe      = obj.get("pipeline")
+        label_map = obj.get("label_map", {})
+    else:
+        pipe      = obj
+        label_map = {}
 
     # Thresholds from Inria dataset area distribution analysis
     SHED_MAX_PX        = 300    # < 300px  (27 m2) -> definitely a shed/garage
@@ -127,11 +131,22 @@ def classify_buildings(bldg_contours):
             continue
 
         # Mid-range: use ML shape features
-        feat = _shape_features(c)
-        if feat is None:
+        raw_f = _shape_features(c)
+        if raw_f is None:
             results.append("residential")
             continue
-        cluster = int(pipe.predict(feat.reshape(1,-1))[0])
+        try:
+            feat = np.array(raw_f, dtype=np.float64).reshape(1, -1)
+            cluster = int(pipe.predict(feat)[0])
+        except Exception:
+            try:
+                km = pipe.named_steps.get("km", pipe.named_steps.get("kmeans"))
+                sc = pipe.named_steps.get("scaler")
+                scaled = sc.transform(np.array(raw_f, dtype=np.float64).reshape(1, -1))
+                dists = np.linalg.norm(km.cluster_centers_ - scaled, axis=1)
+                cluster = int(np.argmin(dists))
+            except Exception:
+                cluster = 1
         ml_label = label_map.get(cluster, "residential")
 
         # Prevent ML from calling mid-size buildings commercial unless aspect ratio is high
