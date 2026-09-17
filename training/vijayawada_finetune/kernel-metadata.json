@@ -1,0 +1,13 @@
+{
+  "id": "shikkoustic/cadastraai-finetune-vijayawada",
+  "title": "cadastraai-finetune-vijayawada",
+  "code_file": "finetune.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": ["shivampratap13/potsdam", "shikkoustic/cadastraai-vijayawada-weak"],
+  "competition_sources": [],
+  "kernel_sources": ["shikkoustic/cadastraai-unet-potsdam"]
+}

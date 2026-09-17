@@ -297,7 +297,7 @@ metrics = {
 json.dump(metrics, open(os.path.join(OUT, "metrics.json"), "w"), indent=2)
 log("AFTER holdout", json.dumps(after_hold))
 
-vis = lambda mask: np.where(mask[..., None], (0.45 * hold_img + [0, 110, 255] * 0.55), hold_img).astype(np.uint8)
+vis = lambda mask: np.where(mask[..., None], (0.45 * hold_img + np.array([0, 110, 255]) * 0.55), hold_img).astype(np.uint8)
 row = np.concatenate([hold_img, vis(before_pred), vis(after_pred)], 1)
 Image.fromarray(row).resize((row.shape[1] // 3, row.shape[0] // 3)).save(os.path.join(OUT, "holdout_compare.jpg"), quality=88)
 log("done")
