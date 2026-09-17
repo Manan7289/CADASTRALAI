@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from pyproj import Transformer
-from rasterio.transform import array_bounds
+from rasterio.transform import array_bounds, from_bounds
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 from shapely.geometry import mapping, shape
 from shapely.ops import transform as shp_transform, unary_union
@@ -79,6 +79,54 @@ def _to_display(arr_hwc, src_crs, src_transform, resampling):
     return out.transpose(1, 2, 0), [[lat0, lon0], [lat1, lon1]]
 
 
+WEBMERC_HALF = 20037508.342789244
+TILE_PX = 256
+
+
+def _tile_bounds_3857(z, x, y):
+    size = 2 * WEBMERC_HALF / 2 ** z
+    left, top = -WEBMERC_HALF + x * size, WEBMERC_HALF - y * size
+    return left, top - size, left + size, top
+
+
+def write_tiles(rgba_hwc, src_crs, src_transform, out_dir, gsd_m):
+    """XYZ tile pyramid (Web Mercator, 256 px WebP) of the survey orthoimage,
+    so the workbench shows full survey resolution at every zoom instead of
+    one downscaled overlay. Max zoom is the first level whose pixel is at
+    least as fine as the survey GSD; empty tiles are skipped."""
+    h, w, _ = rgba_hwc.shape
+    left, bottom, right, top = array_bounds(h, w, src_transform)
+    to_merc = Transformer.from_crs(src_crs, "EPSG:3857", always_xy=True)
+    xs, ys = to_merc.transform([left, right, left, right], [bottom, bottom, top, top])
+    mx0, mx1, my0, my1 = min(xs), max(xs), min(ys), max(ys)
+    lat = np.degrees(np.arctan(np.sinh(((my0 + my1) / 2) / 6378137.0)))
+    res0 = 2 * WEBMERC_HALF / TILE_PX * np.cos(np.radians(lat))  # ground metres per pixel at zoom 0
+    zmax = int(min(23, np.ceil(np.log2(res0 / gsd_m))))
+    zmin = max(0, zmax - 6)
+    bands = [np.ascontiguousarray(rgba_hwc[..., k]) for k in range(4)]
+    count = 0
+    for z in range(zmin, zmax + 1):
+        size = 2 * WEBMERC_HALF / 2 ** z
+        tx0, tx1 = int((mx0 + WEBMERC_HALF) // size), int((mx1 + WEBMERC_HALF) // size)
+        ty0, ty1 = int((WEBMERC_HALF - my1) // size), int((WEBMERC_HALF - my0) // size)
+        resampling = Resampling.bilinear if z == zmax else Resampling.average
+        for tx in range(tx0, tx1 + 1):
+            for ty in range(ty0, ty1 + 1):
+                l, b, r, t = _tile_bounds_3857(z, tx, ty)
+                dst_t = from_bounds(l, b, r, t, TILE_PX, TILE_PX)
+                tile = np.zeros((4, TILE_PX, TILE_PX), np.uint8)
+                for k in range(4):
+                    reproject(bands[k], tile[k], src_transform=src_transform, src_crs=src_crs, dst_transform=dst_t,
+                              dst_crs="EPSG:3857", resampling=resampling, src_nodata=None, dst_nodata=0)
+                if not tile[3].any():
+                    continue
+                p = out_dir / str(z) / str(tx)
+                p.mkdir(parents=True, exist_ok=True)
+                Image.fromarray(tile.transpose(1, 2, 0), "RGBA").save(p / f"{ty}.webp", quality=80, method=4)
+                count += 1
+    return {"min_zoom": zmin, "max_zoom": zmax, "count": count}
+
+
 def _geom_to_ll(geom, transformer):
     return shp_transform(transformer.transform, geom)
 
@@ -95,6 +143,7 @@ def create(name, source, loaded, probs, extracted, model_info):
     alpha = (valid * 255).astype(np.uint8)
     ori, bounds = _to_display(np.dstack([loaded["rgb"], alpha]), crs, transform, Resampling.average)
     Image.fromarray(ori, "RGBA").save(d / "ori.webp", quality=82, method=4)
+    tiles = write_tiles(np.dstack([loaded["rgb"], alpha]), crs, transform, d / "tiles", extracted["stats"]["gsd_m"])
 
     labels = extracted["rasters"]["labels"]
     cls_rgb = np.zeros(labels.shape + (4,), np.uint8)
@@ -129,6 +178,7 @@ def create(name, source, loaded, probs, extracted, model_info):
         "id": sid, "name": name, "source": source, "created": time.strftime("%Y-%m-%d %H:%M"),
         "crs": crs.to_string(), "gsd_m": extracted["stats"]["gsd_m"], "bounds": bounds,
         "used_height": loaded.get("ndsm") is not None, "has_height_layer": (d / "height.png").exists(),
+        "tiles": tiles,
         "model": model_info, "stats": extracted["stats"],
     }
     _write_json(d / "meta.json", meta)

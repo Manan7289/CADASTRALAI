@@ -17,8 +17,9 @@ var CLASS_META = [
 ];
 var ISSUE_LABEL = {
   INVALID: 'Invalid geometry', MULTIPART: 'Multipart parcel', OVERLAP: 'Overlap', DUPLICATE: 'Duplicate',
-  GAP: 'Gap between parcels', SLIVER: 'Sliver', TOO_SMALL: 'Too small'
+  GAP: 'Gap between parcels', SLIVER: 'Sliver', TOO_SMALL: 'Too small', HOLE: 'Encloses another area'
 };
+var MIN_DRAWN_M2 = 3;
 
 var state = {
   surveys: [], sid: null, meta: null,
@@ -35,10 +36,11 @@ function esc(s) {
 function $(id) { return document.getElementById(id); }
 function fmt(n, d) { return n == null ? '—' : Number(n).toLocaleString('en-IN', {maximumFractionDigits: d == null ? 1 : d}); }
 function toast(msg, isError) {
+  document.querySelectorAll('.toast').forEach(function (old) { old.remove(); });
   var t = document.createElement('div');
   t.className = 'toast' + (isError ? ' error' : '');
   t.textContent = msg;
-  document.body.appendChild(t);
+  (document.querySelector('.map-panel') || document.body).appendChild(t);
   setTimeout(function () { t.remove(); }, isError ? 6000 : 2800);
 }
 function setSave(stateName, text) {
@@ -207,7 +209,13 @@ function openSurvey(sid) {
     $('surveySubtitle').textContent = 'Survey Workbench · ' + state.meta.name;
 
     var b = state.meta.bounds;
-    overlays.ori = L.imageOverlay(base + 'ori.webp', b, {attribution: esc(state.meta.source)}).addTo(map);
+    var tiles = state.meta.tiles;
+    overlays.ori = (tiles && tiles.count
+      ? L.tileLayer(base + 'tiles/{z}/{x}/{y}.webp', {
+          minNativeZoom: tiles.min_zoom, maxNativeZoom: tiles.max_zoom, maxZoom: 23,
+          bounds: L.latLngBounds(b), attribution: esc(state.meta.source)})
+      : L.imageOverlay(base + 'ori.webp', b, {attribution: esc(state.meta.source)})
+    ).addTo(map);
     overlays.classes = L.imageOverlay(base + 'classes.png', b, {opacity: 0.55});
     if (state.meta.has_height_layer) overlays.height = L.imageOverlay(base + 'height.png', b, {opacity: 0.6});
     buildingLayer = L.geoJSON(state.buildings, {interactive: false, pmIgnore: true, style: {color: '#6E8BFF', weight: 1, fillOpacity: 0.12}});
@@ -362,9 +370,25 @@ function finishEdit(commit) {
   }
 }
 
+// planar area of a lon/lat ring in square metres (fine at parcel scale)
+function ringAreaM2(coords) {
+  var lat0 = coords[0][1] * Math.PI / 180, kx = 111320 * Math.cos(lat0), ky = 110574, a = 0;
+  for (var i = 0, j = coords.length - 1; i < coords.length; j = i++) {
+    a += (coords[j][0] * kx) * (coords[i][1] * ky) - (coords[i][0] * kx) * (coords[j][1] * ky);
+  }
+  return Math.abs(a / 2);
+}
+
 map.on('pm:create', function (e) {
   var gj = e.layer.toGeoJSON();
   map.removeLayer(e.layer);
+  map.pm.disableDraw();
+  var area = ringAreaM2(gj.geometry.coordinates[0]);
+  if (area < MIN_DRAWN_M2) {
+    setTool('select');
+    toast('That shape is only ' + area.toFixed(1) + ' m² — too small to be a parcel, so it was not added.', true);
+    return;
+  }
   var nextId = state.parcels.features.reduce(function (m, f) { return Math.max(m, f.properties.id); }, 0) + 1;
   gj.properties = {id: nextId, prov_pin: state.sid.toUpperCase() + '-' + String(nextId).padStart(4, '0'),
     status: 'draft', source: 'manual', confidence: null, landcover: null, issues: []};
@@ -512,10 +536,16 @@ function parcelDetailHtml(f) {
     '</div>' +
     '<div style="margin-top:12px"><div class="class-row" style="grid-template-columns:110px 1fr 44px"><span>AI confidence</span>' +
     '<div class="bar"><span style="width:' + (100 * (conf || 0)) + '%;background:' + confColour(conf) + '"></span></div><span class="pct">' + (conf == null ? '—' : conf.toFixed(2)) + '</span></div>' +
-    '<div class="note">Blend of segmentation certainty inside the parcel and how strongly its boundary follows a visible edge (wall, roof line, height step).</div></div>' +
+    '<div class="note">' + confidenceNote(p) + '</div></div>' +
     (issues.length ? '<div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">' + issues.map(issueHtml).join('') + '</div>' : '') +
     statusButtons() +
     '<div class="btn-row" style="margin-top:8px"><button class="btn" data-act="edit">Edit boundary</button><button class="btn" data-act="zoom">Zoom to</button></div></div>';
+}
+
+function confidenceNote(p) {
+  if (p.confidence == null) return 'Drawn or edited by a surveyor — no AI confidence applies.';
+  if ((p.confidence_notes || []).length) return 'Marked down for: <b>' + p.confidence_notes.map(esc).join(', ') + '</b>.';
+  return 'Segmentation is certain, the boundary follows a visible edge and the shape is plausible.';
 }
 
 function kv(k, v) { return '<div class="kv"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }

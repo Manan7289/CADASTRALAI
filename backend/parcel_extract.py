@@ -32,7 +32,8 @@ import shapely
 from affine import Affine
 from scipy import ndimage as ndi
 from shapely.geometry import shape, mapping
-from skimage.morphology import remove_small_objects, remove_small_holes, skeletonize
+from skimage.filters.rank import majority
+from skimage.morphology import disk, remove_small_objects, remove_small_holes, skeletonize
 from skimage.segmentation import watershed
 from skimage.filters import sobel
 
@@ -45,7 +46,19 @@ MIN_BUILDING_M2 = 12
 MIN_BLOCK_M2 = 30
 NARROW_LANE_M = 3.0        # below this a corridor is a narrow access lane (PS: "narrow access roads")
 ROOF_SEPARATION_M = 2.0    # min distance between two roof-instance seeds
-SIMPLIFY_M = 0.35
+PLOT_REACH_M = 6.0         # how far past its roof a building's plot may extend (yard / setback)
+MIN_OPEN_PLOT_M2 = 40      # open-land scraps smaller than this join the neighbouring plot
+OPEN_PLOT_MAX_M2 = 900     # open land larger than this is split along visible edges
+OPEN_PLOT_SPACING_M = 22   # typical spacing between separate open plots
+OPEN_PLOT_MIN_HALFWIDTH_M = 3
+OPEN_PLOT_COMPACTNESS = 0.02  # keeps open plots near their seed on flat ground; edges still steer the cut
+SMOOTH_RADIUS_M = 0.3      # majority-filter radius on the label raster
+ABSORB_ENCLOSED_M2 = 60    # enclosed regions up to this size merge into the surrounding plot
+SIMPLIFY_M = 2.0           # coverage simplification: straight survey-like edges, shared edges kept shared
+BUILDING_SIMPLIFY_M = 0.5
+RECTANGULARITY = 0.82      # roof area / min rotated rectangle area above which a roof is drawn as a rectangle
+PLAUSIBLE_PLOT_M2 = 1500   # plots larger than this lose confidence (likely several plots merged)
+IRREGULAR_THINNESS = 0.25  # 4*pi*A/P^2 below this counts as an irregular shape
 
 
 def _px_area(transform):
@@ -104,11 +117,39 @@ def building_instances(labels, edges, gsd, px_m2):
     return inst
 
 
-def parcel_raster(corridors, inst, edges, labels, px_m2):
+def _open_land_seeds(region, gsd):
+    """Seeds for splitting large open land: evenly spaced points inside the
+    region (skipping points squeezed against its edge). The compact watershed
+    then grows a plot around each seed, with the cut between neighbouring
+    plots following the strongest visible edge (wall, fence, path) nearby."""
+    dist = ndi.distance_transform_edt(region)
+    step = max(3, int(OPEN_PLOT_SPACING_M / gsd))
+    min_d = min(OPEN_PLOT_MIN_HALFWIDTH_M / gsd, 0.5 * dist.max())
+    seeds = np.zeros(region.shape, np.int32)
+    n = 0
+    for y in range(step // 2, region.shape[0], step):
+        for x in range(step // 2, region.shape[1], step):
+            if region[y, x] and dist[y, x] >= min_d:
+                n += 1
+                seeds[max(0, y - 1):y + 2, max(0, x - 1):x + 2] = n
+    if n == 0:
+        cy, cx = np.unravel_index(int(np.argmax(dist)), dist.shape)
+        seeds[cy, cx] = 1
+    return np.where(region, seeds, 0)
+
+
+def parcel_raster(corridors, inst, edges, labels, px_m2, gsd):
+    """Every land pixel gets exactly one parcel id.
+
+    Roofs only claim land within PLOT_REACH_M of their footprint (their own
+    yard / setback); land beyond that reach is open land. Large open land is
+    split into separate plots along visible edges rather than kept as one
+    catch-all parcel that wraps around its neighbours."""
     land = ~corridors
-    blocks, n_blocks = ndi.label(land)
+    blocks, _ = ndi.label(land)
     parcels = np.zeros(labels.shape, dtype=np.int32)
     next_id = 1
+    reach_px = max(1, int(PLOT_REACH_M / gsd))
     for b, sl in enumerate(ndi.find_objects(blocks), start=1):
         if sl is None:
             continue
@@ -117,17 +158,112 @@ def parcel_raster(corridors, inst, edges, labels, px_m2):
             continue
         seeds = np.where(block, inst[sl], 0)
         ids = np.unique(seeds[seeds > 0])
-        if len(ids) == 0:
-            # an unbuilt block is one open-land parcel -- no invented subdivision
-            parcels[sl][block] = next_id
-            next_id += 1
-            continue
-        relabel = np.zeros(seeds.max() + 1, dtype=np.int32)
-        relabel[ids] = np.arange(next_id, next_id + len(ids))
-        grown = watershed(edges[sl], relabel[seeds], mask=block)
-        parcels[sl][block] = grown[block]
-        next_id += len(ids)
+        block_out = np.zeros(block.shape, np.int32)
+
+        if len(ids):
+            relabel = np.zeros(seeds.max() + 1, dtype=np.int32)
+            relabel[ids] = np.arange(next_id, next_id + len(ids))
+            near = block & (ndi.distance_transform_edt(seeds == 0) <= reach_px)
+            grown = watershed(edges[sl], relabel[seeds], mask=near)
+            block_out[near] = grown[near]
+            next_id += len(ids)
+
+        open_land = block & (block_out == 0)
+        if open_land.any():
+            comps, n = ndi.label(open_land)
+            for c in range(1, n + 1):
+                region = comps == c
+                area = region.sum() * px_m2
+                if area < MIN_OPEN_PLOT_M2 and len(ids):
+                    continue  # small scraps are absorbed by the neighbouring plot below
+                if area <= OPEN_PLOT_MAX_M2:
+                    block_out[region] = next_id
+                    next_id += 1
+                    continue
+                osd = _open_land_seeds(region, gsd)
+                grown = watershed(edges[sl], osd, mask=region, compactness=OPEN_PLOT_COMPACTNESS)
+                block_out[region] = np.where(grown[region] > 0, grown[region] + next_id - 1, 0)
+                next_id += int(osd.max())
+        parcels[sl][block] = block_out[block]
     return parcels
+
+
+def smooth_labels(label_raster, radius_px):
+    """Majority filter over the label raster: removes the pixel staircase and
+    texture-noise fringes along boundaries before vectorising."""
+    if radius_px < 1 or label_raster.max() >= 65535:
+        return label_raster
+    lab16 = label_raster.astype(np.uint16)
+    smoothed = majority(lab16, disk(radius_px), mask=label_raster > 0)
+    return np.where(label_raster > 0, smoothed, 0).astype(label_raster.dtype)
+
+
+def resolve_enclosures(cover, corridor_id, px_m2, max_rounds=6):
+    """A parcel must not have a hole.
+
+    - A small enclosed region (an open-land scrap, a courtyard mis-read as a
+      lane) is absorbed into the parcel around it.
+    - A substantial enclosed region (a real plot surrounded by one big plot)
+      is kept, and the surrounding plot is instead split in two by a straight
+      cut through the enclosed region -- so neither plot swallows the other.
+    """
+    out = cover.copy()
+    for _ in range(max_rounds):
+        changed = False
+        next_id = int(out.max()) + 1
+        for lab_id, sl in enumerate(ndi.find_objects(out), start=1):
+            if sl is None or lab_id == corridor_id:
+                continue
+            sl = tuple(slice(max(0, s.start - 1), s.stop + 1) for s in sl)
+            view = out[sl]
+            region = view == lab_id
+            holes = ndi.binary_fill_holes(region) & ~region
+            if not holes.any():
+                continue
+            hole_lab, n = ndi.label(holes)
+            cut_rows = []
+            for h in range(1, n + 1):
+                hole = hole_lab == h
+                if hole.sum() * px_m2 <= ABSORB_ENCLOSED_M2 or not (view[hole] > 0).any():
+                    view[hole & (view > 0)] = lab_id
+                    changed = True
+                else:
+                    cut_rows.append(int(np.nonzero(hole)[0].mean()))
+            if cut_rows:
+                region = view == lab_id
+                cut = np.zeros_like(region)
+                for r in cut_rows:
+                    cut[r] = True
+                pieces, m = ndi.label(region & ~cut)
+                if m >= 2:
+                    sizes = np.bincount(pieces.ravel())[1:]
+                    keep = int(np.argmax(sizes)) + 1
+                    for p in range(1, m + 1):
+                        if p != keep:
+                            view[pieces == p] = next_id
+                            next_id += 1
+                    # the one-pixel cut line joins whichever piece lies just above it
+                    cut_px = region & cut
+                    ys, xs = np.nonzero(cut_px)
+                    above = view[np.maximum(ys - 1, 0), xs]
+                    view[ys, xs] = np.where((above > 0) & (above != corridor_id), above, lab_id)
+                    changed = True
+        if not changed:
+            break
+    return out
+
+
+def regularise_building(poly):
+    """Buildings are drawn the way a surveyor would: nearly rectangular roofs
+    become their minimum rotated rectangle, others are simplified with
+    near-straight angles removed."""
+    if poly.is_empty:
+        return poly
+    rect = poly.minimum_rotated_rectangle
+    if rect.area > 0 and poly.area / rect.area >= RECTANGULARITY:
+        return rect
+    simple = poly.simplify(BUILDING_SIMPLIFY_M, preserve_topology=True)
+    return simple if simple.is_valid and not simple.is_empty else poly
 
 
 def corridor_attributes(corridors, gsd):
@@ -197,6 +333,34 @@ def merge_detached_pieces(label_raster):
     return out
 
 
+def parcel_confidence(geom, seg_conf, boundary_support):
+    """How much to trust a parcel, 0..1, with the reasons it was marked down.
+
+    Pixel certainty and visible-boundary support are necessary but not
+    sufficient: a huge, hole-ridden or very irregular parcel can be made of
+    'certain' pixels and still be wrong, so plausibility of the shape itself
+    multiplies the score."""
+    reasons = []
+    base = 0.6 * seg_conf + 0.4 * boundary_support
+    if seg_conf < 0.6:
+        reasons.append("uncertain segmentation")
+    if boundary_support < 0.35:
+        reasons.append("weak visible boundary")
+    plaus = 1.0
+    if geom.area > PLAUSIBLE_PLOT_M2:
+        plaus *= max(0.35, (PLAUSIBLE_PLOT_M2 / geom.area) ** 0.5)
+        reasons.append("very large for one plot")
+    thin = 4 * np.pi * geom.area / geom.length ** 2 if geom.length else 0
+    if thin < IRREGULAR_THINNESS:
+        plaus *= max(0.5, thin / IRREGULAR_THINNESS)
+        reasons.append("irregular shape")
+    parts = getattr(geom, "geoms", [geom])
+    if any(len(p.interiors) for p in parts):
+        plaus *= 0.5
+        reasons.append("encloses another area")
+    return round(float(base * plaus), 3), reasons
+
+
 def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
@@ -209,19 +373,28 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
     edges = edge_strength(rgb, ndsm)
     corridors = corridor_mask(labels, px_m2, gsd)
     inst = building_instances(labels, edges, gsd, px_m2)
-    parcels = parcel_raster(corridors, inst, edges, labels, px_m2)
-    corr = corridor_attributes(corridors, gsd)
+    parcels = parcel_raster(corridors, inst, edges, labels, px_m2, gsd)
 
-    valid = np.ones(labels.shape, bool) if valid is None else valid
+    # only nodata connected to the image edge is outside the survey; black pixels inside it (deep shadow) are not
+    valid = np.ones(labels.shape, bool) if valid is None else ndi.binary_fill_holes(valid)
     corridor_id = int(parcels.max()) + 1
     cover = np.where(corridors, corridor_id, parcels).astype(np.int32)
     # mask nodata (e.g. the warp border) BEFORE merging, since masking can split a parcel into pieces
-    cover = merge_detached_pieces(np.where(valid, fill_unassigned(cover, valid), 0))
+    cover = np.where(valid, fill_unassigned(cover, valid), 0)
+    cover = smooth_labels(cover, int(round(SMOOTH_RADIUS_M / gsd)))
+    # detached-piece merging can create new enclosures and vice versa, so settle both
+    for _ in range(3):
+        before = cover
+        cover = merge_detached_pieces(resolve_enclosures(merge_detached_pieces(cover), corridor_id, px_m2))
+        if np.array_equal(before, cover):
+            break
     parcels = np.where(cover == corridor_id, 0, cover)
+    corridors = cover == corridor_id
+    corr = corridor_attributes(corridors, gsd)
     cover_polys = vectorise(cover, transform)
     corridor_polys = {1: cover_polys.pop(corridor_id)} if corridor_id in cover_polys else {}
     parcel_polys = cover_polys
-    building_polys = vectorise(inst, transform)
+    building_polys = {k: regularise_building(g) for k, g in vectorise(inst, transform).items()}
 
     # per-parcel stats straight from the rasters
     idx = np.arange(parcels.max() + 1)
@@ -242,13 +415,13 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
         built = built_px[pid] / max(n_px[pid], 1)
         veg = veg_px[pid] / max(n_px[pid], 1)
         seg_conf = conf_sum[pid] / max(n_px[pid], 1)
-        boundary_support = edge_on_boundary[pid] / max(boundary_px[pid], 1)
-        confidence = round(float(0.6 * seg_conf + 0.4 * min(1.0, 2 * boundary_support)), 3)
+        boundary_support = min(1.0, 2 * edge_on_boundary[pid] / max(boundary_px[pid], 1))
+        confidence, reasons = parcel_confidence(geom, seg_conf, boundary_support)
         cover = "Built-up" if built >= 0.35 else ("Vegetated open land" if veg >= 0.5 else "Open / vacant land")
         parcel_features.append({
             "id": pid, "geometry": geom, "area_m2": round(geom.area, 1), "perimeter_m": round(geom.length, 1),
             "built_pct": round(float(100 * built), 1), "veg_pct": round(float(100 * veg), 1), "landcover": cover,
-            "road_frontage": bool(frontage[pid]), "confidence": confidence,
+            "road_frontage": bool(frontage[pid]), "confidence": confidence, "confidence_notes": reasons,
         })
 
     building_features = [{"id": bid, "geometry": g, "area_m2": round(g.area, 1)}

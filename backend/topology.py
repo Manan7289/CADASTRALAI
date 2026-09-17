@@ -9,6 +9,8 @@ problem geometry (so the dashboard can draw it), and a suggested fix.
 Checks:
   INVALID       self-intersecting / malformed ring (GEOS is_valid)
   MULTIPART     one parcel id made of several disjoint pieces
+  HOLE          parcel encloses another area (a donut) -- the enclosed area is either
+                part of it or a separate plot that should cut it
   OVERLAP       two parcels share area (> OVERLAP_TOL_M2)
   GAP           unclaimed hole enclosed by parcels (> GAP_TOL_M2)
   SLIVER        long thin shape (thinness 4*pi*A/P^2 below SLIVER_THINNESS)
@@ -72,6 +74,11 @@ def validate(parcels, exclude=None):
                                  "Rebuild with make_valid and keep the largest valid part."))
             g = make_valid(g)
         parts = _polygons(g)
+        n_holes = sum(len(pt.interiors) for pt in parts)
+        if n_holes:
+            issues.append(_issue("HOLE", "medium", [pid], g,
+                                 f"Parcel encloses {n_holes} area(s) -- a parcel boundary should not wrap around its neighbours.",
+                                 "Fill small enclosed areas into the parcel; otherwise split the parcel around the enclosed plot."))
         if len(parts) > 1:
             issues.append(_issue("MULTIPART", "medium", [pid], g,
                                  f"Parcel is split into {len(parts)} disconnected pieces.",
@@ -150,6 +157,31 @@ def auto_fix(parcels, exclude=None):
             g = max(g.geoms, key=lambda x: x.area)
             log.append({"parcel_ids": [p["id"]], "action": "kept largest part"})
         work.append({**p, "geometry": g})
+
+    # holes: fill each hole; parcels sitting entirely inside it are merged in -- unless
+    # one of them outranks the enclosing parcel (e.g. surveyor-approved), in which case
+    # the hole is left for a human to resolve
+    for p in work:
+        g = p["geometry"]
+        if g.geom_type != "Polygon" or not g.interiors:
+            continue
+        kept_rings = []
+        for ring in g.interiors:
+            hole = Polygon(ring)
+            inside = [q for q in work if q is not p and not q["geometry"].is_empty
+                      and hole.buffer(0.05).contains(q["geometry"])]
+            if any(q.get("confidence", 0.0) > p.get("confidence", 0.0) for q in inside):
+                kept_rings.append(ring)
+                continue
+            for q in inside:
+                log.append({"parcel_ids": [q["id"], p["id"]],
+                            "action": f"parcel {q['id']} enclosed by parcel {p['id']} merged into it"})
+                q["geometry"] = Polygon()
+        if len(kept_rings) < len(g.interiors):
+            p["geometry"] = Polygon(g.exterior, kept_rings)
+            log.append({"parcel_ids": [p["id"]],
+                        "action": f"filled {len(g.interiors) - len(kept_rings)} hole(s) in parcel {p['id']}"})
+    work = [p for p in work if not p["geometry"].is_empty]
 
     def rank(p):
         return (p.get("confidence", 0.0), p["geometry"].area)
