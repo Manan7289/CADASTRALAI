@@ -21,6 +21,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
+import intake
 import survey
 import upload_pipeline
 from export import export as export_parcels
@@ -31,7 +32,7 @@ UPLOADS_DIR = BASE_DIR / "data" / "uploads"
 RAW_UPLOADS_DIR = BASE_DIR / "data" / "raw" / "uploads"
 
 app = Flask(__name__, static_folder=None)
-app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024  # 300MB, generous for a short drone video
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024  # orthomosaics and DSMs are large
 
 
 @app.route("/api/process", methods=["POST"])
@@ -130,9 +131,53 @@ def serve_survey(sid, filename):
     return resp
 
 
+# ---------------------------------------------------------------- new survey intake
+@app.route("/api/intake", methods=["POST"])
+def api_intake():
+    try:
+        info = intake.create_upload(request.files, request.form)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Could not read the upload: {e}"}), 400
+    return jsonify(info)
+
+
+@app.route("/api/intake/<uid>/process", methods=["POST"])
+def api_intake_process(uid):
+    body = request.get_json(silent=True) or {}
+    aoi = body.get("aoi")
+    try:
+        if aoi is not None:
+            aoi = [float(v) for v in aoi]
+            if len(aoi) != 4:
+                raise ValueError("aoi must be [west, south, east, north].")
+        job_id = intake.start_job(uid, (body.get("name") or "").strip()[:120], aoi)
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown upload."}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/jobs/<job_id>")
+def api_job(job_id):
+    job = intake.get_job(job_id)
+    return (jsonify(job), 200) if job else (jsonify({"error": "Unknown job."}), 404)
+
+
+@app.route("/intake/<uid>/preview.png")
+def serve_intake_preview(uid):
+    try:
+        return send_from_directory(intake._upload_dir(uid), "preview.png")
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown upload."}), 404
+
+
 @app.route("/")
 @app.route("/<path:filename>")
-def serve(filename="index.html"):
+def serve(filename="workbench.html"):
     return send_from_directory(FRONTEND_DIR, filename)
 
 
