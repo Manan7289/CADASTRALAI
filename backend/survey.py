@@ -32,6 +32,7 @@ import topology
 SURVEYS_DIR = Path(__file__).resolve().parent.parent / "data" / "surveys"
 DISPLAY_MAX_PX = 2400
 CLASS_COLOURS = {0: (200, 90, 90), 1: (70, 110, 230), 2: (225, 225, 225), 3: (130, 215, 200), 4: (40, 160, 70)}
+HEIGHT_DISPLAY_MIN_M = 1.0  # below this the nDSM is mostly ground noise; not drawn
 STATUSES = ("draft", "approved", "rejected", "field_check")
 
 
@@ -155,7 +156,7 @@ def create(name, source, loaded, probs, extracted, model_info):
 
     if loaded.get("ndsm") is not None:
         h = np.clip(loaded["ndsm"] / 15.0, 0, 1)
-        ramp = np.dstack([255 * h, 180 * (1 - np.abs(h - 0.5) * 2), 255 * (1 - h), np.where(valid & (h > 0.02), 220, 0)])
+        ramp = np.dstack([255 * h, 180 * (1 - np.abs(h - 0.5) * 2), 255 * (1 - h), np.where(valid & (loaded["ndsm"] > HEIGHT_DISPLAY_MIN_M), 220, 0)])
         h_img, _ = _to_display(ramp.astype(np.uint8), crs, transform, Resampling.bilinear)
         Image.fromarray(h_img, "RGBA").save(d / "height.png", optimize=True)
 
