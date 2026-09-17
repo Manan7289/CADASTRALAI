@@ -27,7 +27,7 @@ import subprocess
 import sys
 import time
 
-SMOKE = True
+SMOKE = False
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "segmentation-models-pytorch==0.5.0"], check=True)
 
