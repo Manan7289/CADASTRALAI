@@ -82,10 +82,14 @@ def warp_to_grid(path, dst_crs, dst_transform, width, height, bands=None, resamp
     multi-GB orthomosaic never has to be loaded whole."""
     with rasterio.open(path) as src:
         idx = bands or list(range(1, src.count + 1))
+        # add_alpha marks which target pixels the source actually covers, so the area outside the
+        # file is NaN even when the file declares no nodata value (otherwise it silently reads as 0)
         with WarpedVRT(src, crs=dst_crs, transform=dst_transform, width=width, height=height,
-                       resampling=resampling, src_nodata=src.nodata, nodata=src.nodata) as vrt:
-            out = vrt.read(idx, out_dtype="float32", masked=True)
-    return out.filled(np.nan)
+                       resampling=resampling, src_nodata=src.nodata, add_alpha=True) as vrt:
+            out = vrt.read(idx, out_dtype="float32", masked=True).filled(np.nan)
+            covered = vrt.read(vrt.count) > 0
+    out[:, ~covered] = np.nan
+    return out
 
 
 def prepare_grid(ori_path, gsd_m, aoi_lonlat=None):
