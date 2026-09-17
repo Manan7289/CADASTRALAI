@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CadastraAI — Survey Workbench</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/vendor/leaflet.css">
+<link rel="stylesheet" href="/vendor/leaflet-geoman.css">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="workbench.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="wordmark">CADASTRA<span>AI</span></div>
+      <div class="subtitle" id="surveySubtitle">Survey Workbench · Team ELAVI</div>
+    </div>
+    <label class="survey-pick">
+      <span>Survey</span>
+      <select id="surveySelect" aria-label="Survey"></select>
+    </label>
+    <nav class="segmented">
+      <a href="workbench.html" class="active">WORKBENCH</a>
+      <a href="upload.html">NEW SURVEY</a>
+    </nav>
+    <div class="save-chip" id="saveChip" data-state="idle">Saved</div>
+  </header>
+
+  <main class="workspace wb">
+    <div class="map-panel">
+      <div id="map"></div>
+
+      <div class="map-toolbar" role="toolbar" aria-label="Editing tools">
+        <button data-tool="select" class="active" title="Select (shift-click to add to selection)">Select</button>
+        <button data-tool="edit" title="Edit the selected parcel's boundary">Edit boundary</button>
+        <button data-tool="draw" title="Draw a new parcel">Draw parcel</button>
+        <button data-tool="merge" title="Merge the selected parcels">Merge</button>
+        <button data-tool="delete" title="Delete the selected parcels">Delete</button>
+      </div>
+
+      <div class="colour-mode">
+        <span>Colour parcels by</span>
+        <div class="segmented small" id="colourMode">
+          <button data-mode="status" class="active">Review</button>
+          <button data-mode="confidence">Confidence</button>
+          <button data-mode="landcover">Land cover</button>
+        </div>
+      </div>
+
+      <div class="map-legend" id="mapLegend"></div>
+      <div class="loading" id="loadingScreen">Loading surveys…</div>
+    </div>
+
+    <aside class="inspector wb-side">
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="overview" class="active">Overview</button>
+        <button role="tab" data-tab="review">Review <span class="count" id="reviewCount"></span></button>
+        <button role="tab" data-tab="issues">Topology <span class="count" id="issueCount"></span></button>
+        <button role="tab" data-tab="export">Export</button>
+      </div>
+      <div class="tab-body" id="tabBody"></div>
+    </aside>
+  </main>
+</div>
+
+<script src="/vendor/leaflet.js"></script>
+<script src="/vendor/leaflet-geoman.js"></script>
+<script src="workbench.js"></script>
+</body>
+</html>
