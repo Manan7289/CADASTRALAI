@@ -19,3 +19,9 @@ dist/
 # Large generated files
 *.tif
 *.tiff
+# ML model files (too large for GitHub - stored on D drive)
+*.pkl
+backend/ml/model_cache/
+
+# Scratch / temp
+scratch/
