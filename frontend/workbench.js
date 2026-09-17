@@ -656,7 +656,8 @@ var TAB_WIRERS = {};
 window.WB = {
   state: state, map: map, esc: esc, fmt: fmt, api: api, toast: toast, zoomTo: zoomTo,
   selectParcel: selectParcel, parcelById: parcelById, restyle: restyle, renderTabs: renderTabs,
-  buildParcelLayer: buildParcelLayer, setSave: setSave, RECORD: RECORD,
+  buildParcelLayer: buildParcelLayer, setSave: setSave, RECORD: RECORD, applyServerResult: applyServerResult,
+  loadSurveys: loadSurveys,
   layersControl: function () { return layersControl; },
   registerTab: function (name, render, wire) { TAB_RENDERERS[name] = render; if (wire) TAB_WIRERS[name] = wire; },
   reloadParcels: function () {

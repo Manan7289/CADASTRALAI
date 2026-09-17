@@ -77,6 +77,37 @@ def api_surveys():
     return jsonify(survey.list_surveys())
 
 
+@app.route("/api/surveys/<sid>", methods=["PATCH", "DELETE"])
+def api_survey_manage(sid):
+    try:
+        if request.method == "DELETE":
+            return jsonify(survey.delete(sid))
+        return jsonify(survey.rename(sid, (request.get_json(silent=True) or {}).get("name")))
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/surveys/<sid>/history")
+def api_history(sid):
+    try:
+        return jsonify(survey.history(sid))
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+
+
+@app.route("/api/surveys/<sid>/undo", methods=["POST"])
+def api_undo(sid):
+    try:
+        parcels_fc, issues_fc, undone = survey.undo(sid)
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"parcels": parcels_fc, "issues": issues_fc, "undone": undone})
+
+
 @app.route("/api/surveys/<sid>/parcels", methods=["PUT"])
 def api_save_parcels(sid):
     body = request.get_json(silent=True)
