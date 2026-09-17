@@ -175,6 +175,14 @@ def clear(sid, kind):
     d = ref_dir(sid)
     for name in ({"parcels": ["parcels.geojson"], "gnss": ["gnss.geojson"]}[kind] + ["comparison.json"]):
         (d / name).unlink(missing_ok=True)
+    if kind == "parcels":
+        # the comparison against that record no longer applies
+        parcels_path = survey.survey_dir(sid) / "parcels.geojson"
+        fc = json.loads(parcels_path.read_text())
+        for f in fc["features"]:
+            for k in ("record_status", "record_iou", "record_ref_id"):
+                f["properties"].pop(k, None)
+        parcels_path.write_text(json.dumps(fc))
     m = _meta(sid)
     m.pop(kind, None)
     (d / "meta.json").write_text(json.dumps(m, indent=2))
