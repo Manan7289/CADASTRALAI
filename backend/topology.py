@@ -127,6 +127,25 @@ def validate(parcels, exclude=None):
     return issues
 
 
+MERGE_CLOSE_M = 0.02      # close hairline slivers/spikes left where merged edges don't coincide exactly
+
+
+def clean_polygon(geom):
+    """A single valid polygon without hairline spikes or small interior holes:
+    make valid, keep the largest part, close by MERGE_CLOSE_M, drop holes up
+    to MAX_GAP_M2."""
+    parts = _polygons(make_valid(geom) if not geom.is_valid else geom)
+    if not parts:
+        return Polygon()
+    g = max(parts, key=lambda x: x.area)
+    closed = g.buffer(MERGE_CLOSE_M, join_style=2).buffer(-MERGE_CLOSE_M, join_style=2)
+    parts = _polygons(make_valid(closed) if not closed.is_valid else closed)
+    if parts:
+        g = max(parts, key=lambda x: x.area)
+    keep = [r for r in g.interiors if Polygon(r).area > MAX_GAP_M2]
+    return Polygon(g.exterior, keep)
+
+
 def _shared_length(a, b):
     return a.boundary.intersection(b.boundary).length
 
@@ -229,9 +248,7 @@ def auto_fix(parcels, exclude=None):
             target = _best_neighbour(g, cands)
             if target is None:
                 continue
-            merged = unary_union([work[target]["geometry"], g])
-            parts = _polygons(merged)
-            work[target]["geometry"] = max(parts, key=lambda x: x.area) if len(parts) > 1 else merged
+            work[target]["geometry"] = clean_polygon(unary_union([work[target]["geometry"], g]))
             log.append({"parcel_ids": [p["id"], work[target]["id"]],
                         "action": f"{'too-small' if small else 'sliver'} parcel {p['id']} merged into {work[target]['id']}"})
             work.pop(i)
@@ -251,8 +268,8 @@ def auto_fix(parcels, exclude=None):
             target = _best_neighbour(hole, cands)
             if target is None:
                 continue
-            merged = unary_union([work[target]["geometry"], hole])
-            if merged.geom_type == "Polygon":
+            merged = clean_polygon(unary_union([work[target]["geometry"], hole]))
+            if not merged.is_empty:
                 work[target]["geometry"] = merged
                 log.append({"parcel_ids": [work[target]["id"]],
                             "action": f"filled {hole.area:.1f} m2 gap into parcel {work[target]['id']}"})
