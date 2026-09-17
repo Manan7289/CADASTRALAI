@@ -56,8 +56,10 @@ def _issue(kind, severity, ids, geom, msg, fix):
             "geometry": geom, "message": msg, "suggested_fix": fix}
 
 
-def validate(parcels):
+def validate(parcels, exclude=None):
     """parcels: list of {"id": ..., "geometry": shapely Polygon in metres}.
+    exclude: optional geometry (e.g. the road/lane corridors) that is allowed
+    to sit between parcels, so enclosed roads aren't reported as gaps.
     Returns a list of issue dicts (geometries still in metres)."""
     issues = []
     geoms = [p["geometry"] for p in parcels]
@@ -108,6 +110,8 @@ def validate(parcels):
     for poly in _polygons(union):
         for ring in poly.interiors:
             hole = Polygon(ring)
+            if exclude is not None:
+                hole = hole.difference(exclude)
             if GAP_TOL_M2 < hole.area <= MAX_GAP_M2:
                 neighbours = [ids[k] for k in tree.query(hole, predicate="touches")]
                 issues.append(_issue("GAP", "medium", neighbours, hole,
@@ -129,7 +133,7 @@ def _best_neighbour(geom, candidates):
     return best
 
 
-def auto_fix(parcels):
+def auto_fix(parcels, exclude=None):
     """Returns (fixed_parcels, change_log). Order: make valid -> drop
     duplicates -> resolve overlaps (larger/higher-confidence parcel keeps the
     shared area) -> merge slivers/too-small into best neighbour -> fill
@@ -207,7 +211,9 @@ def auto_fix(parcels):
     for poly in _polygons(unary_union([p["geometry"] for p in work])):
         for ring in poly.interiors:
             hole = Polygon(ring)
-            if not (GAP_TOL_M2 < hole.area <= MAX_GAP_M2):
+            if exclude is not None:
+                hole = hole.difference(exclude)
+            if hole.geom_type != "Polygon" or not (GAP_TOL_M2 < hole.area <= MAX_GAP_M2):
                 continue
             cands = [(int(j), work[int(j)]["geometry"]) for j in tree.query(hole, predicate="intersects")]
             target = _best_neighbour(hole, cands)
