@@ -27,7 +27,7 @@ import subprocess
 import sys
 import time
 
-SMOKE = False
+SMOKE = True
 
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "segmentation-models-pytorch==0.5.0"], check=True)
 
@@ -57,6 +57,9 @@ EPOCHS = 1 if SMOKE else 14
 ITERS = 5 if SMOKE else 200
 LR = 1e-4
 NEG_WEIGHT = 1.0
+SEAM_WEIGHT = 3.0          # pixels between touching footprints: teach a gap between neighbours
+VEG_PROB = 0.6             # teacher confidence needed for a vegetation pseudo-label
+VEG_EXG = 12               # and the pixel must actually look green (2G - R - B)
 HEIGHT_DROPOUT = 0.5
 POTSDAM_TRAIN_TILES = 2 if SMOKE else 14
 POTSDAM_TEST_TILES = 1 if SMOKE else 6
@@ -115,6 +118,7 @@ def load_vj(p):
 
 vj_val = [load_vj(p) for p in vj_paths[:n_val]]
 vj_train = [load_vj(p) for p in vj_paths[n_val:]]
+hold_inst = np.asarray(Image.open(f"{vj_dir}/holdout/demo_block_instances.png")).astype(np.int32)
 hold_img = np.asarray(Image.open(f"{vj_dir}/holdout/demo_block.jpg").convert("RGB"))
 hold_lab = np.asarray(Image.open(f"{vj_dir}/holdout/demo_block_label.png"))
 P_TRAIN = [load_potsdam(t) for t in p_train_ids]
@@ -190,10 +194,12 @@ def predict(model, xz, drop_height):
 
 
 def eval_holdout(model, image=None, label=None):
+    is_holdout = label is None
     image = hold_img if image is None else image
     label = hold_lab if label is None else label
     xz = np.dstack([image, np.zeros(image.shape[:2], np.uint8)])
-    pred_b = predict(model, xz, True).argmax(0) == 1
+    pred_cls = predict(model, xz, True).argmax(0)
+    pred_b = pred_cls == 1
     hold_lab_ = label
     m = hold_lab_ != 255
     t, p = hold_lab_[m] == 1, pred_b[m]
@@ -212,7 +218,35 @@ def eval_holdout(model, image=None, label=None):
             "predicted_building_fraction_labelled": round(float(p.mean()), 4),
             "label_building_fraction_labelled": round(float(t.mean()), 4),
             "osm_road_pixels_predicted_building": round(float(pred_b[road].mean()), 4) if road.any() else None,
+            "seam_pixels_predicted_building": round(float(pred_b[hold_lab_ == 5].mean()), 4) if (hold_lab_ == 5).any() else None,
+            **(instance_metrics(pred_b) if is_holdout else {}),
+            **({"vegetation_pixels_predicted_vegetation": round(float(np.isin(pred_cls[hold_veg], (3, 4)).mean()), 4)}
+               if is_holdout and hold_veg.any() else {}),
             "not_building_pixels_predicted_building": round(float(pred_b[notb].mean()), 4) if notb.any() else None}, pred_b
+
+
+def instance_metrics(pred_b):
+    """How well predicted buildings separate individual footprints: a footprint
+    is 'merged' when the predicted component covering most of it also covers
+    most of another footprint."""
+    comps, ncomp = ndi.label(pred_b)
+    ids = np.unique(hold_inst[hold_inst > 0])
+    owner = {}
+    for i in ids:
+        px = comps[hold_inst == i]
+        if px.size < 1200:          # < 12 m2 at 10 cm
+            continue
+        vals = np.bincount(px)
+        vals[0] = 0
+        c = int(vals.argmax())
+        if vals[c] >= 0.5 * px.size:
+            owner[int(i)] = c
+    by_comp = {}
+    for i, c in owner.items():
+        by_comp.setdefault(c, []).append(i)
+    merged = sum(len(v) for v in by_comp.values() if len(v) > 1)
+    return {"footprints_scored": len(owner), "footprints_merged_with_neighbour": merged,
+            "footprint_merge_rate": round(merged / max(len(owner), 1), 4), "predicted_components": int(ncomp)}
 
 
 def eval_val(model):
@@ -241,6 +275,33 @@ def eval_potsdam(model, drop_height):
 
 
 model = build_model()
+
+
+def add_vegetation_pseudo_labels(teacher, items):
+    """Where the weak label says 'not building' (0), let the Potsdam teacher mark
+    confident tree (3) / low vegetation (4), but only on pixels that look green."""
+    n3 = n4 = 0
+    for k, (img, lab_) in enumerate(items):
+        pr = predict(teacher, np.dstack([img, np.zeros(img.shape[:2], np.uint8)]), True)
+        rgbf = img.astype(np.int16)
+        exg = 2 * rgbf[..., 1] - rgbf[..., 0] - rgbf[..., 2]
+        lab2 = lab_.copy()
+        free = (lab_ == 0) & (exg > VEG_EXG)
+        tree = free & (pr[4] > VEG_PROB)
+        low = free & ~tree & (pr[3] > VEG_PROB)
+        lab2[tree], lab2[low] = 3, 4
+        n3 += int(tree.sum()); n4 += int(low.sum())
+        items[k] = (img, lab2)
+    return n3, n4
+
+
+t_pl = time.time()
+veg_train = add_vegetation_pseudo_labels(model, vj_train)
+veg_val = add_vegetation_pseudo_labels(model, vj_val)
+hold_veg_ref = [(hold_img, hold_lab.copy())]
+add_vegetation_pseudo_labels(model, hold_veg_ref)
+hold_veg = np.isin(hold_veg_ref[0][1], (3, 4))
+log(f"vegetation pseudo-labels: train tree/low {veg_train}, val {veg_val}, holdout veg px {int(hold_veg.sum())} ({time.time() - t_pl:.0f}s)")
 before_hold, before_pred = eval_holdout(model)
 log("BEFORE val building F1", eval_val(model))
 before_potsdam = eval_potsdam(model, False)
@@ -265,10 +326,12 @@ for epoch in range(EPOCHS):
             logp = torch.log_softmax(logits[BATCH_P:].float(), 1)
             log_b = logp[:, 1]
             log_not_b = torch.log1p(-log_b.exp().clamp(max=1 - 1e-6))
-            pos, neg, road = yv == 1, yv == 0, yv == 2
-            # buildings -> building class; OSM roads/lanes -> road class; everything else labelled -> "not building"
-            lvj = -(log_b[pos].sum() + logp[:, 2][road].sum() + NEG_WEIGHT * log_not_b[neg].sum()) / \
-                max(1, int(pos.sum() + road.sum() + NEG_WEIGHT * neg.sum()))
+            pos, neg, road, tree, low, seam = yv == 1, yv == 0, yv == 2, yv == 3, yv == 4, yv == 5
+            # buildings -> building; OSM roads -> road; green teacher labels -> tree / low vegetation;
+            # seams between touching footprints and other labelled land -> "not building"
+            lvj = -(log_b[pos].sum() + logp[:, 2][road].sum() + logp[:, 4][tree].sum() + logp[:, 3][low].sum()
+                    + NEG_WEIGHT * log_not_b[neg].sum() + SEAM_WEIGHT * log_not_b[seam].sum()) / \
+                max(1, int(pos.sum() + road.sum() + tree.sum() + low.sum() + NEG_WEIGHT * neg.sum() + SEAM_WEIGHT * seam.sum()))
             loss = lpots + lvj
         opt.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()

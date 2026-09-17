@@ -6,11 +6,20 @@ Footprints are traced from satellite imagery, so they are coarse and can be
 offset by 1-2 m from the drone image. OpenStreetMap roads/lanes add real
 negatives -- without them, narrow lanes between footprints fall entirely in
 the ignore band and a model can learn to paint everything as building.
+Footprints are kept as individual buildings: the first source (Microsoft,
+mostly one polygon per house) is used as-is and later sources only add
+buildings it does not already cover, so the label does not become one
+merged blob per block. Where two buildings touch, the seam between them is
+its own label, so a model is taught to leave a gap between neighbours.
+
 Labels:
   1   building      -- inside a footprint, eroded by INNER_M
   2   road / lane   -- OSM highway centreline buffered by a per-type half-width
+  5   seam          -- within SEAM_M of two different footprints (touching neighbours)
   0   not building  -- outside footprints dilated by OUTER_M (includes OSM rail/water)
   255 ignore        -- uncertain band around footprint edges, road/footprint conflicts, nodata
+(3/4 are reserved for tree / low vegetation pseudo-labels added at training time.)
+The holdout also gets demo_block_instances.png: footprint instance ids (uint16).
 
 The demo block (plus HOLDOUT_BUFFER_M) is never used for training: it is
 written separately as the held-out evaluation tile.
@@ -31,12 +40,14 @@ import numpy as np
 import rasterio
 from PIL import Image
 from pyproj import Transformer
+from rasterio.enums import MergeAlg
 from rasterio.features import rasterize
 from rasterio.transform import from_origin
 from rasterio.warp import transform_bounds
 from scipy import ndimage as ndi
 from shapely.geometry import box, shape
-from shapely.ops import transform as shp_transform
+from shapely.ops import transform as shp_transform, unary_union
+from shapely.strtree import STRtree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 import segment  # noqa: E402
@@ -48,10 +59,37 @@ OUTER_M = 0.6
 ROAD_HALF_WIDTH_M = {"primary": 5.0, "primary_link": 3.5, "secondary": 4.5, "tertiary": 3.5, "tertiary_link": 2.5,
                      "residential": 1.8, "living_street": 1.5, "service": 1.5, "pedestrian": 1.5, "busway": 3.0,
                      "track": 1.2, "path": 0.8, "footway": 0.8, "unclassified": 2.0}
-ROAD_EDGE_MARGIN_M = 0.4   # stay inside the carriageway: OSM centrelines can be offset a little
+ROAD_EDGE_MARGIN_M = 0.4
+SEAM_M = 0.5               # half-width of the seam label between touching footprints
+MIN_ADDED_M2 = 12          # leftover pieces of a later-source footprint smaller than this are slivers, not buildings   # stay inside the carriageway: OSM centrelines can be offset a little
 MIN_VALID = 0.6
 DEMO_BLOCK = (80.63652, 16.52445, 80.63885, 16.52678)   # west, south, east, north
 HOLDOUT_BUFFER_M = 30
+
+
+def instances_from_sources(sources):
+    """sources: list of lists of UTM polygons, most individual first. Later
+    sources only contribute polygons not already covered by earlier ones."""
+    kept = []
+    for i, geoms in enumerate(sources):
+        if i == 0:
+            kept.extend(g for g in geoms if g.is_valid and g.area > 4)
+            continue
+        tree = STRtree(kept) if kept else None
+        added = []
+        for g in geoms:
+            if not g.is_valid or g.area <= 4:
+                continue
+            near = [kept[int(j)] for j in tree.query(g, predicate="intersects")] if tree is not None else []
+            if not near:
+                added.append(g)
+                continue
+            # keep only what the earlier source does not already cover (often the neighbours it missed)
+            rest = g.difference(unary_union(near).buffer(SEAM_M))
+            parts = getattr(rest, "geoms", [rest])
+            added.extend(pt for pt in parts if pt.geom_type == "Polygon" and pt.area >= MIN_ADDED_M2)
+        kept.extend(added)
+    return kept
 
 
 def labels_for(geoms, transform, shape_hw, valid, roads=()):
@@ -62,6 +100,10 @@ def labels_for(geoms, transform, shape_hw, valid, roads=()):
     lab = np.full(shape_hw, 255, np.uint8)
     lab[core] = 1
     lab[~near] = 0
+    if len(geoms) > 1:
+        count = rasterize([(g.buffer(SEAM_M), 1) for g in geoms], out_shape=shape_hw, transform=transform,
+                          merge_alg=MergeAlg.add, dtype="uint8")
+        lab[count >= 2] = 5
     road_shapes = [(g.buffer(max(0.3, w - ROAD_EDGE_MARGIN_M), cap_style=2), 1) for g, w in roads]
     if road_shapes:
         road = rasterize(road_shapes, out_shape=shape_hw, transform=transform).astype(bool)
@@ -97,11 +139,12 @@ def main(mosaic, footprints, out_dir, ways=None):
     left, bottom, right, top = transform_bounds("EPSG:4326", crs, w, s, e, n)
     to_utm = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
 
-    geoms = []
+    sources = []
     for fp in footprints.split(","):
         fc = json.loads(Path(fp).read_text())
-        geoms += [shp_transform(to_utm.transform, shape(f["geometry"])) for f in fc["features"]]
-    print(f"{len(geoms)} footprints from {len(footprints.split(','))} source(s)")
+        sources.append([shp_transform(to_utm.transform, shape(f["geometry"])) for f in fc["features"]])
+    geoms = instances_from_sources(sources)
+    print(f"{len(geoms)} individual footprints kept from {[len(s) for s in sources]} per source")
     roads, _ = load_ways(ways, to_utm)
     print(f"{len(roads)} OSM road/lane centrelines")
     demo = shp_transform(to_utm.transform, box(*DEMO_BLOCK))
@@ -146,10 +189,14 @@ def main(mosaic, footprints, out_dir, ways=None):
                      [(g, w) for g, w in roads if g.intersects(demo.buffer(10))])
     Image.fromarray(np.nan_to_num(rgb).clip(0, 255).astype(np.uint8).transpose(1, 2, 0)).save(out / "holdout" / "demo_block.jpg", quality=95)
     Image.fromarray(lab).save(out / "holdout" / "demo_block_label.png")
+    demo_geoms = [g for g in geoms if g.intersects(demo)]
+    inst = rasterize([(g, i + 1) for i, g in enumerate(demo_geoms)], out_shape=(hpx, wpx), transform=t, dtype="uint16")
+    Image.fromarray(inst).save(out / "holdout" / "demo_block_instances.png")
 
     meta = {"gsd_m": GSD, "tile_px": TILE, "crs": crs.to_string(), "train_tiles": kept,
             "skipped_low_valid": skipped_valid, "skipped_holdout": skipped_holdout,
-            "label_values": {"0": "not building", "1": "building", "2": "road / lane (OSM)", "255": "ignore"},
+            "label_values": {"0": "not building", "1": "building", "2": "road / lane (OSM)", "5": "seam between touching footprints", "255": "ignore"},
+            "footprints_kept": len(geoms),
             "osm_ways": Path(ways).name if ways else None,
             "inner_m": INNER_M, "outer_m": OUTER_M, "holdout": {"bbox_lonlat": DEMO_BLOCK, "buffer_m": HOLDOUT_BUFFER_M},
             "footprints": [Path(fp).name for fp in footprints.split(",")],
