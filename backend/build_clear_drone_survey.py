@@ -66,46 +66,30 @@ def latlon_to_px(lat, lon):
     py = (geo["lat_nw"] - lat) / (geo["lat_nw"] - geo["lat_se"]) * H
     return px, py
 
-# ── 3. Parse OSM road network & build road corridors ──────────────────────────
+# ── 3. Run ML Model (road_clf.pkl) Inference for Road Corridors & Streets ────
 print("=" * 60)
-print("STEP 1: Parse Road Network & Land Sectors")
+print("STEP 1: Run ML Model (road_clf.pkl) Road & Street Network Inference")
 print("=" * 60)
 
-osm_path = Path("D:/cadastraai_data/raw_parcels/osm_bbox.json")
-osm_data = json.loads(osm_path.read_text(encoding="utf-8"))
-elements = osm_data.get("elements", [])
-nodes = {e["id"]: (e["lat"], e["lon"]) for e in elements if e["type"] == "node" and "lat" in e}
-ways  = [e for e in elements if e["type"] == "way"]
+from road_detector import detect_roads
+road_mask, freeway_poly, street_segs = detect_roads(img_bgr, gt_mask=crop_gt)
 
-ROAD_W = {
-    "motorway": 20, "trunk": 16, "primary": 14, "secondary": 12,
-    "tertiary": 10, "unclassified": 8, "residential": 7, "service": 5,
-}
-
-road_lines = []
+# Convert ML road mask to polygon corridors for parcel boundary clipping
+contours_road, _ = cv2.findContours(road_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 road_polys = []
-street_segs = []
-
-for w in ways:
-    tags = w.get("tags", {})
-    if "highway" not in tags: continue
-    hw = tags["highway"]
-    width_px = ROAD_W.get(hw, 6)
-    refs = w.get("nodes", [])
-    pts = [latlon_to_px(*nodes[r]) for r in refs if r in nodes]
-    if len(pts) >= 2:
-        ls = LineString(pts)
-        if ls.length > 0:
-            road_lines.append((ls, width_px))
-            road_polys.append(ls.buffer(width_px / 2.0, cap_style=2, join_style=2))
-            p1, p2 = pts[0], pts[-1]
-            ang = math.degrees(math.atan2(p2[1]-p1[1], p2[0]-p1[0])) % 180
-            street_segs.append((ang, (p1, p2)))
+for c in contours_road:
+    if cv2.contourArea(c) > 100:
+        eps = 0.015 * cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
+        if len(approx) >= 3:
+            p = Polygon(approx)
+            if p.is_valid:
+                road_polys.append(p)
 
 road_union = unary_union(road_polys) if road_polys else Polygon()
 roi_box    = box(0, 0, W, H)
 
-print(f"  Rasterized {len(road_polys)} road corridors")
+print(f"  ML Road Detector: Extracted {len(road_polys)} ML road polygon corridors and {len(street_segs)} street segments")
 
 # ── 4. Extract building contours ─────────────────────────────────────────────
 print("\n" + "=" * 60)

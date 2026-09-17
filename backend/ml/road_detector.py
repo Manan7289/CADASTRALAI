@@ -20,18 +20,24 @@ TRAIN_GTS   = Path(__file__).parent.parent.parent / "data" / "datasets" / "inria
 
 
 def _pixel_features(img_bgr):
-    """9-dim per-pixel feature: LAB + HSV + 3 texture stats."""
+    """13-dim per-pixel feature: LAB + HSV + 5x5 stats + Sobel gx/gy/mag + 15x15 mean."""
     lab  = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
     hsv  = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    k    = np.ones((5,5), np.float32) / 25.0
-    lmean = cv2.filter2D(gray, -1, k)
-    lstd  = np.sqrt(np.clip(cv2.filter2D(gray**2, -1, k) - lmean**2, 0, None))
+    k5   = np.ones((5,5), np.float32) / 25.0
+    lmean = cv2.filter2D(gray, -1, k5)
+    lstd  = np.sqrt(np.clip(cv2.filter2D(gray**2, -1, k5) - lmean**2, 0, None))
     lrng  = (cv2.dilate(gray, np.ones((5,5),np.uint8)) -
-              cv2.erode(gray,  np.ones((5,5),np.uint8)))
+              cv2.erode(gray,  np.ones((5,5),np.uint8))).astype(np.float32)
+    gx    = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy    = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    gmag  = cv2.magnitude(gx, gy)
+    k15   = np.ones((15,15), np.float32) / 225.0
+    lmean15 = cv2.filter2D(gray, -1, k15)
     return np.stack([lab[...,0], lab[...,1], lab[...,2],
                      hsv[...,0], hsv[...,1], hsv[...,2],
-                     lmean, lstd, lrng], axis=-1)
+                     lmean, lstd, lrng,
+                     gx, gy, gmag, lmean15], axis=-1)
 
 
 def _pixel_labels(gt, img_bgr):
@@ -107,7 +113,7 @@ def detect_roads(img_bgr, gt_mask=None):
         clf = pickle.load(f)
 
     H, W = img_bgr.shape[:2]
-    feats = _pixel_features(img_bgr).reshape(-1,9)
+    feats = _pixel_features(img_bgr).reshape(-1, 13)
     chunk = 400_000
     pred  = np.empty(H*W, dtype=np.int8)
     for s in range(0, H*W, chunk):
