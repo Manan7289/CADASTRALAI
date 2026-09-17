@@ -8,16 +8,21 @@ DSM/DTM are co-registered with the image before nDSM = DSM - DTM.
 The model is height-optional (trained with height dropout): without a DSM
 the height channel is fed as zeros, and the output says so.
 """
+import os
 from pathlib import Path
 
 import numpy as np
 import rasterio
 import torch
-from rasterio.warp import Resampling, calculate_default_transform, reproject, transform_bounds
+from rasterio.transform import from_origin
+from rasterio.vrt import WarpedVRT
+from rasterio.warp import Resampling, transform_bounds
 
+import dtm as dtm_mod
 from export import utm_crs_for
 
-MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "unet_potsdam.pt"
+# CADASTRAAI_MODEL lets a dev run point at another checkpoint (e.g. the smoke-test weights)
+MODEL_PATH = Path(os.environ.get("CADASTRAAI_MODEL", Path(__file__).resolve().parent.parent / "models" / "unet_potsdam.pt"))
 NDSM_SCALE_M = 30.0   # Potsdam's normalised DSM jpgs map 0..255 to roughly 0..30 m above ground
 _model_cache = {}
 
@@ -41,38 +46,54 @@ def load_model(path=MODEL_PATH):
 
 
 def warp_to_grid(path, dst_crs, dst_transform, width, height, bands=None, resampling=Resampling.bilinear):
+    """Read only the part of the source that falls on the target grid (via a
+    WarpedVRT, which also uses the file's overviews when downsampling), so a
+    multi-GB orthomosaic never has to be loaded whole."""
     with rasterio.open(path) as src:
         idx = bands or list(range(1, src.count + 1))
-        out = np.zeros((len(idx), height, width), dtype=np.float32)
-        for k, b in enumerate(idx):
-            reproject(rasterio.band(src, b), out[k], src_transform=src.transform, src_crs=src.crs,
-                      dst_transform=dst_transform, dst_crs=dst_crs, resampling=resampling,
-                      src_nodata=src.nodata, dst_nodata=np.nan if src.nodata is not None else None)
-    return out
+        with WarpedVRT(src, crs=dst_crs, transform=dst_transform, width=width, height=height,
+                       resampling=resampling, src_nodata=src.nodata, nodata=src.nodata) as vrt:
+            out = vrt.read(idx, out_dtype="float32", masked=True)
+    return out.filled(np.nan)
 
 
-def prepare_grid(ori_path, gsd_m):
+def prepare_grid(ori_path, gsd_m, aoi_lonlat=None):
+    """Target grid in the AOI's UTM zone at gsd_m. aoi_lonlat = (west, south,
+    east, north) restricts it to an area of interest inside the survey."""
     with rasterio.open(ori_path) as src:
-        lon0, lat0, lon1, lat1 = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
-        dst_crs = utm_crs_for((lon0 + lon1) / 2, (lat0 + lat1) / 2)
-        transform, width, height = calculate_default_transform(src.crs, dst_crs, src.width, src.height,
-                                                               *src.bounds, resolution=gsd_m)
-    return dst_crs, transform, width, height
+        if src.crs is None:
+            raise ValueError("The orthoimage has no coordinate reference system -- georeference it first.")
+        full = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+    w, s, e, n = aoi_lonlat if aoi_lonlat else full
+    w, s, e, n = max(w, full[0]), max(s, full[1]), min(e, full[2]), min(n, full[3])
+    if w >= e or s >= n:
+        raise ValueError("The selected area does not overlap the orthoimage.")
+    dst_crs = utm_crs_for((w + e) / 2, (s + n) / 2)
+    left, bottom, right, top = transform_bounds("EPSG:4326", dst_crs, w, s, e, n)
+    width, height = int(np.ceil((right - left) / gsd_m)), int(np.ceil((top - bottom) / gsd_m))
+    return dst_crs, from_origin(left, top, gsd_m, gsd_m), width, height
 
 
-def load_survey(ori_path, dsm_path=None, dtm_path=None, ndsm_path=None, gsd_m=0.10):
-    crs, transform, w, h = prepare_grid(ori_path, gsd_m)
+def load_survey(ori_path, dsm_path=None, dtm_path=None, ndsm_path=None, gsd_m=0.10, aoi_lonlat=None):
+    crs, transform, w, h = prepare_grid(ori_path, gsd_m, aoi_lonlat)
     rgb = warp_to_grid(ori_path, crs, transform, w, h, bands=[1, 2, 3], resampling=Resampling.average)
+    valid = np.isfinite(rgb).all(0) & (np.nan_to_num(rgb).sum(0) > 0)
     rgb = np.nan_to_num(rgb).clip(0, 255).astype(np.uint8).transpose(1, 2, 0)
-    ndsm = None
+    ndsm, height_source = None, None
     if ndsm_path:
-        ndsm = warp_to_grid(ndsm_path, crs, transform, w, h, bands=[1])[0]
+        ndsm, height_source = warp_to_grid(ndsm_path, crs, transform, w, h, bands=[1])[0], "nDSM supplied"
     elif dsm_path and dtm_path:
-        ndsm = warp_to_grid(dsm_path, crs, transform, w, h, bands=[1])[0] - warp_to_grid(dtm_path, crs, transform, w, h, bands=[1])[0]
+        ndsm = (warp_to_grid(dsm_path, crs, transform, w, h, bands=[1])[0]
+                - warp_to_grid(dtm_path, crs, transform, w, h, bands=[1])[0])
+        height_source = "DSM and DTM supplied"
+    elif dsm_path:
+        dsm = warp_to_grid(dsm_path, crs, transform, w, h, bands=[1])[0]
+        ndsm, _ = dtm_mod.ndsm_from_dsm(np.where(np.isfinite(dsm), dsm, np.nanmin(dsm)), gsd_m)
+        height_source = "DSM supplied, DTM derived by ground filter"
     if ndsm is not None:
         ndsm = np.clip(np.nan_to_num(ndsm), 0, NDSM_SCALE_M)
-    valid = rgb.sum(-1) > 0
-    return {"rgb": rgb, "ndsm": ndsm, "valid": valid, "crs": crs, "transform": transform}
+    return {"rgb": rgb, "ndsm": ndsm, "valid": valid, "crs": crs, "transform": transform,
+            "height_source": height_source}
 
 
 @torch.no_grad()
