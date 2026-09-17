@@ -144,9 +144,11 @@ def corridor_attributes(corridors, gsd):
     }
 
 
-def vectorise(label_raster, transform, mask=None):
+def vectorise(label_raster, transform):
+    """Polygonise a label raster (0 = nodata) and simplify all polygons as one
+    coverage, so shared edges stay shared after simplification."""
     geoms = {}
-    for geom, val in rasterio.features.shapes(label_raster.astype(np.int32), mask=mask if mask is not None else label_raster > 0,
+    for geom, val in rasterio.features.shapes(label_raster.astype(np.int32), mask=label_raster > 0,
                                               transform=transform, connectivity=4):
         g = shape(geom)
         geoms[int(val)] = g if int(val) not in geoms else geoms[int(val)].union(g)
@@ -155,7 +157,47 @@ def vectorise(label_raster, transform, mask=None):
     return dict(zip(ids, polys))
 
 
-def extract(probs, rgb, transform: Affine, ndsm=None):
+def fill_unassigned(label_raster, valid):
+    """Give every valid pixel without a label the label of its nearest labelled
+    pixel (e.g. land fragments too small to be a block), so the output tiles
+    the whole survey area with no holes."""
+    missing = valid & (label_raster == 0)
+    if not missing.any() or not (label_raster > 0).any():
+        return label_raster
+    _, (iy, ix) = ndi.distance_transform_edt(label_raster == 0, return_indices=True)
+    out = label_raster.copy()
+    out[missing] = label_raster[iy[missing], ix[missing]]
+    return out
+
+
+def merge_detached_pieces(label_raster):
+    """Each label keeps only its largest connected piece; every other piece is
+    relabelled to the neighbouring label it shares the longest border with, so
+    no parcel ends up as a multipart polygon."""
+    out = label_raster.copy()
+    for lab_id, sl in enumerate(ndi.find_objects(out), start=1):
+        if sl is None:
+            continue
+        sl = tuple(slice(max(0, s.start - 1), s.stop + 1) for s in sl)
+        region = out[sl] == lab_id
+        comps, n = ndi.label(region)
+        if n <= 1:
+            continue
+        sizes = np.bincount(comps.ravel())[1:]
+        keep = int(np.argmax(sizes)) + 1
+        for c in range(1, n + 1):
+            if c == keep:
+                continue
+            piece = comps == c
+            ring = ndi.binary_dilation(piece) & ~piece
+            neighbours = out[sl][ring]
+            neighbours = neighbours[(neighbours != lab_id) & (neighbours > 0)]
+            if neighbours.size:
+                out[sl][piece] = np.bincount(neighbours).argmax()
+    return out
+
+
+def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
     geometries) plus summary stats."""
@@ -170,9 +212,16 @@ def extract(probs, rgb, transform: Affine, ndsm=None):
     parcels = parcel_raster(corridors, inst, edges, labels, px_m2)
     corr = corridor_attributes(corridors, gsd)
 
-    parcel_polys = vectorise(parcels, transform)
+    valid = np.ones(labels.shape, bool) if valid is None else valid
+    corridor_id = int(parcels.max()) + 1
+    cover = np.where(corridors, corridor_id, parcels).astype(np.int32)
+    # mask nodata (e.g. the warp border) BEFORE merging, since masking can split a parcel into pieces
+    cover = merge_detached_pieces(np.where(valid, fill_unassigned(cover, valid), 0))
+    parcels = np.where(cover == corridor_id, 0, cover)
+    cover_polys = vectorise(cover, transform)
+    corridor_polys = {1: cover_polys.pop(corridor_id)} if corridor_id in cover_polys else {}
+    parcel_polys = cover_polys
     building_polys = vectorise(inst, transform)
-    corridor_polys = vectorise(corridors.astype(np.int32), transform)
 
     # per-parcel stats straight from the rasters
     idx = np.arange(parcels.max() + 1)
