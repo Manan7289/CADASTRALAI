@@ -168,38 +168,40 @@ STAGES = ["Reading imagery and height data", "Running AI segmentation", "Extract
           "Validating topology and saving survey"]
 
 
-def start_job(uid, name, aoi):
+def start_job(uid, name, aoi, model="auto"):
     d = _upload_dir(uid)
     info = json.loads((d / "info.json").read_text(encoding="utf-8"))
     if aoi is None:
         aoi = info["ori"]["bounds"]
     if aoi_area_km2(aoi) > MAX_AOI_KM2:
         raise ValueError(f"Selected area is {aoi_area_km2(aoi):.2f} km²; draw an area of at most {MAX_AOI_KM2} km².")
+    model_key, model_path, model_info = segment.choose_model(model, "dsm" in info["files"])
     job_id = uuid.uuid4().hex[:10]
     with _lock:
-        _jobs[job_id] = {"id": job_id, "state": "running", "stage": 0, "stages": STAGES, "started": time.time()}
-    threading.Thread(target=_run, args=(job_id, d, info, name, aoi), daemon=True).start()
+        _jobs[job_id] = {"id": job_id, "state": "running", "stage": 0, "stages": STAGES, "started": time.time(),
+                         "model": model_info["label"]}
+    threading.Thread(target=_run, args=(job_id, d, info, name, aoi, model_key, model_path, model_info), daemon=True).start()
     return job_id
 
 
-def _run(job_id, d, info, name, aoi):
+def _run(job_id, d, info, name, aoi, model_key, model_path, model_info):
     try:
         files = info["files"]
         _set(job_id, stage=0)
         loaded = segment.load_survey(d / files["ori"], dsm_path=d / files["dsm"] if "dsm" in files else None,
                                      dtm_path=d / files["dtm"] if "dtm" in files else None, aoi_lonlat=aoi)
         _set(job_id, stage=1)
-        probs, _ = segment.predict(loaded["rgb"], loaded["ndsm"])
+        probs, _ = segment.predict(loaded["rgb"], loaded["ndsm"], model_path=model_path)
         _set(job_id, stage=2)
         extracted = parcel_extract.extract(probs, loaded["rgb"], loaded["transform"], ndsm=loaded["ndsm"], valid=loaded["valid"])
         _set(job_id, stage=3)
-        _, ckpt = segment.load_model()
         notes = list(info.get("notes", []))
         if loaded["height_source"]:
             notes.append(loaded["height_source"])
         source = f"Uploaded ORI ({info['ori']['gsd_cm']} cm native, processed at 10 cm)" + (" · " + "; ".join(notes) if notes else "")
         meta = survey.create(name or "Untitled survey", source, loaded, probs, extracted,
-                             {"name": ckpt.get("arch", "U-Net") + " trained on ISPRS Potsdam (RGB + nDSM, height-optional)"})
+                             {"key": model_key, "name": model_info["label"], "summary": model_info["summary"],
+                              "limits": model_info["limits"]})
         _set(job_id, state="done", survey_id=meta["id"], seconds=round(time.time() - get_job(job_id)["started"], 1))
     except Exception as e:
         traceback.print_exc()

@@ -25,6 +25,7 @@ import compare
 import field
 import intake
 import reference
+import segment
 import survey
 import upload_pipeline
 from export import export as export_parcels
@@ -267,12 +268,17 @@ def api_intake_process(uid):
             aoi = [float(v) for v in aoi]
             if len(aoi) != 4:
                 raise ValueError("aoi must be [west, south, east, north].")
-        job_id = intake.start_job(uid, (body.get("name") or "").strip()[:120], aoi)
+        job_id = intake.start_job(uid, (body.get("name") or "").strip()[:120], aoi, body.get("model") or "auto")
     except FileNotFoundError:
         return jsonify({"error": "Unknown upload."}), 404
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"job_id": job_id})
+
+
+@app.route("/api/models")
+def api_models():
+    return jsonify({k: {kk: v[kk] for kk in ("label", "summary", "limits")} for k, v in segment.MODELS.items()})
 
 
 @app.route("/api/jobs/<job_id>")

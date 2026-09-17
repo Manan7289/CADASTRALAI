@@ -496,7 +496,9 @@ function overviewHtml() {
     var v = cf[c[0]] || 0;
     return '<div class="class-row"><span>' + c[1] + '</span><div class="bar"><span style="width:' + (100 * v) + '%;background:' + c[2] + '"></span></div><span class="pct">' + Math.round(100 * v) + '%</span></div>';
   }).join('') +
-    '<div class="note" style="margin-top:8px"><b>Model:</b> ' + esc((m.model && m.model.name) || '—') + '</div></div>';
+    '<div class="note" style="margin-top:8px"><b>Model:</b> ' + esc((m.model && m.model.name) || '—') +
+    (m.model && m.model.summary ? '<br>' + esc(m.model.summary) : '') +
+    (m.model && m.model.limits ? '<br><b>Known limits:</b> ' + esc(m.model.limits) : '') + '</div></div>';
   return html;
 }
 
