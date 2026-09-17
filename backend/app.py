@@ -22,6 +22,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 import compare
+import field
 import intake
 import reference
 import survey
@@ -181,6 +182,38 @@ def api_compare(sid):
     return jsonify(result)
 
 
+# ---------------------------------------------------------------- field verification
+@app.route("/api/surveys/<sid>/field")
+def api_field(sid):
+    try:
+        pid = request.args.get("parcel_id")
+        return jsonify({"summary": field.summary(sid),
+                        "observations": field.observations(sid, int(pid) if pid else None)})
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+
+
+@app.route("/api/surveys/<sid>/field/<int:parcel_id>", methods=["POST"])
+def api_field_record(sid, parcel_id):
+    try:
+        obs, parcels_fc, issues_fc = field.record(sid, parcel_id, request.form, request.files.getlist("photos"))
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"observation": obs, "parcels": parcels_fc, "issues": issues_fc})
+
+
+@app.route("/api/surveys/<sid>/field/corner", methods=["POST"])
+def api_field_corner(sid):
+    try:
+        return jsonify(field.record_corner(sid, request.form))
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
 # ---------------------------------------------------------------- new survey intake
 @app.route("/api/intake", methods=["POST"])
 def api_intake():
@@ -232,4 +265,10 @@ def serve(filename="workbench.html"):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5050)
+    import os
+    # CADASTRAAI_HTTPS=1 serves on the local network over HTTPS (self-signed), which phone
+    # browsers require before they will share GPS with the field verification page
+    if os.environ.get("CADASTRAAI_HTTPS") == "1":
+        app.run(host="0.0.0.0", port=5443, ssl_context="adhoc", debug=False)
+    else:
+        app.run(debug=True, port=5050)
