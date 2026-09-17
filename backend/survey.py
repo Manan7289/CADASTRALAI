@@ -282,8 +282,15 @@ def auto_fix(sid):
     utm = [{"id": f["properties"]["id"], "geometry": shp_transform(fwd.transform, shape(f["geometry"])),
             "confidence": priority(f["properties"])} for f in fc["features"]]
     fixed, log = topology.auto_fix(utm, exclude=_corridor_union_utm(sid, fwd))
+    def to_lonlat(g):
+        # reprojection can turn a near-degenerate vertex into a self-intersection; check the round trip
+        ll = shp_transform(back.transform, g)
+        if not shp_transform(fwd.transform, ll).is_valid:
+            ll = shp_transform(back.transform, topology.clean_polygon(shp_transform(fwd.transform, ll)))
+        return ll
+
     new_fc = {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "properties": props[p["id"]], "geometry": mapping(shp_transform(back.transform, p["geometry"]))}
+        {"type": "Feature", "properties": props[p["id"]], "geometry": mapping(to_lonlat(p["geometry"]))}
         for p in fixed if not p["geometry"].is_empty]}
     parcels_fc, issues_fc = save_parcels(sid, new_fc, action=f"auto-fix: {len(log)} changes")
     return parcels_fc, issues_fc, log
