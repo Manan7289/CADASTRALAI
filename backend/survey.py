@@ -199,10 +199,32 @@ def _corridor_union_utm(sid, fwd):
     return unary_union(geoms) if geoms else None
 
 
-def save_parcels(sid, parcels_fc, action="edited"):
+HISTORY_KEEP = 50
+TRASH_DIR = SURVEYS_DIR.parent / "surveys_trash"
+
+
+def _snapshot(d, action):
+    """Keep the parcel layer as it was before this save, so it can be undone."""
+    src = d / "parcels.geojson"
+    if not src.exists():
+        return
+    hist = d / "history"
+    hist.mkdir(exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{uuid.uuid4().hex[:4]}"
+    (hist / f"{stamp}.geojson").write_bytes(src.read_bytes())
+    (hist / f"{stamp}.json").write_text(json.dumps({"before": action}))
+    snaps = sorted(hist.glob("*.geojson"))
+    for old in snaps[:-HISTORY_KEEP]:
+        old.unlink(missing_ok=True)
+        old.with_suffix(".json").unlink(missing_ok=True)
+
+
+def save_parcels(sid, parcels_fc, action="edited", snapshot=True):
     """Validate, annotate each parcel with its issues, write layer + issues,
     update review stats, append to the audit log. Returns (parcels_fc, issues_fc)."""
     d = survey_dir(sid)
+    if snapshot:
+        _snapshot(d, action)
     meta, fwd, back = _utm(sid)
     feats = parcels_fc["features"]
     for f in feats:
@@ -282,3 +304,50 @@ def merge(sid, ids):
     keep["properties"].update({"status": "draft", "source": "edited"})
     fc["features"] = [f for f in fc["features"] if f["properties"]["id"] not in ids or f is keep]
     return save_parcels(sid, fc, action=f"merged parcels {ids} into {keep['properties']['id']}")
+
+
+def undo(sid):
+    """Restore the parcel layer from before the most recent change."""
+    d = survey_dir(sid)
+    snaps = sorted((d / "history").glob("*.geojson")) if (d / "history").exists() else []
+    if not snaps:
+        raise ValueError("Nothing to undo.")
+    last = snaps[-1]
+    undone = json.loads(last.with_suffix(".json").read_text()).get("before", "last change") if last.with_suffix(".json").exists() else "last change"
+    fc = _read_json(last)
+    last.unlink()
+    last.with_suffix(".json").unlink(missing_ok=True)
+    parcels_fc, issues_fc = save_parcels(sid, fc, action=f"undo: {undone}", snapshot=False)
+    return parcels_fc, issues_fc, undone
+
+
+def history(sid, limit=200):
+    d = survey_dir(sid)
+    log = d / "edits.jsonl"
+    entries = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()] if log.exists() else []
+    undoable = len(list((d / "history").glob("*.geojson"))) if (d / "history").exists() else 0
+    return {"entries": entries[-limit:][::-1], "undo_available": undoable}
+
+
+def rename(sid, name):
+    name = (name or "").strip()[:120]
+    if not name:
+        raise ValueError("Name cannot be empty.")
+    d = survey_dir(sid)
+    meta = _read_json(d / "meta.json")
+    old = meta.get("name")
+    meta["name"] = name
+    _write_json(d / "meta.json", meta)
+    with open(d / "edits.jsonl", "a", encoding="utf-8") as log:
+        log.write(json.dumps({"t": time.strftime("%Y-%m-%d %H:%M:%S"), "action": f"renamed from '{old}' to '{name}'"}) + "\n")
+    return meta
+
+
+def delete(sid):
+    """Soft delete: the survey folder moves to data/surveys_trash/ and can be restored by moving it back."""
+    import shutil
+    d = survey_dir(sid)
+    TRASH_DIR.mkdir(exist_ok=True)
+    dest = TRASH_DIR / f"{sid}--deleted-{time.strftime('%Y%m%d-%H%M%S')}"
+    shutil.move(str(d), str(dest))
+    return {"id": sid, "moved_to": str(dest.relative_to(SURVEYS_DIR.parent.parent))}
