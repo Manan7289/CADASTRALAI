@@ -85,7 +85,9 @@ function clearMap() {
   [parcelLayer, issueLayer, buildingLayer, corridorLayer, labelLayer].forEach(function (l) { if (l) map.removeLayer(l); });
   Object.keys(overlays).forEach(function (k) { map.removeLayer(overlays[k]); });
   overlays = {};
+  parcelLayer = issueLayer = buildingLayer = corridorLayer = labelLayer = null;
   if (layersControl) layersControl.remove();
+  layersControl = null;
 }
 
 function parcelStyle(f) {
@@ -129,7 +131,7 @@ function buildParcelLayer() {
   });
   updateLabelVisibility();
   if (layersControl) {
-    layersControl.removeLayer(overlays.parcels);
+    if (overlays.parcels) layersControl.removeLayer(overlays.parcels);
     layersControl.addOverlay(parcelLayer, 'Parcels');
   }
   overlays.parcels = parcelLayer;
@@ -251,6 +253,7 @@ function openSurvey(sid) {
     $('loadingScreen').style.display = 'none';
     document.dispatchEvent(new CustomEvent('wb:survey-opened', {detail: {sid: sid, base: base}}));
   }).catch(function (e) {
+    console.error('openSurvey failed', e);
     $('loadingScreen').textContent = 'Could not load survey: ' + e.message;
   });
 }
@@ -691,7 +694,7 @@ map.on('click', function () {
   if (state.tool === 'select' && state.selected.length && !state.editingLayer) { state.selected = []; restyle(); renderTabs(); }
 });
 document.addEventListener('keydown', function (e) {
-  if (e.target.matches('input, select, textarea')) return;
+  if (e.target && e.target.matches && e.target.matches('input, select, textarea')) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (state.editingLayer) {
     // stop Enter from also "clicking" whichever button still has focus
