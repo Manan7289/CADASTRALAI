@@ -20,6 +20,12 @@ var ISSUE_LABEL = {
   GAP: 'Gap between parcels', SLIVER: 'Sliver', TOO_SMALL: 'Too small', HOLE: 'Encloses another area'
 };
 var MIN_DRAWN_M2 = 3;
+var RECORD = {
+  MATCH: {label: 'Matches record', color: '#6CBE81'},
+  BOUNDARY_DIFFERS: {label: 'Boundary differs', color: '#E0A94A'},
+  SPLIT_OR_MERGED: {label: 'Split / merged vs record', color: '#B694DA'},
+  NOT_IN_RECORD: {label: 'Not in record', color: '#E2685F'}
+};
 
 var state = {
   surveys: [], sid: null, meta: null,
@@ -88,6 +94,7 @@ function parcelStyle(f) {
   var fill;
   if (state.colourMode === 'confidence') fill = confColour(p.confidence);
   else if (state.colourMode === 'landcover') fill = LANDCOVER[p.landcover] || '#5C6B63';
+  else if (state.colourMode === 'record') fill = RECORD[p.record_status] ? RECORD[p.record_status].color : '#5C6B63';
   else fill = STATUS[p.status] ? STATUS[p.status].color : '#9FB3A8';
   var hasIssue = p.issues && p.issues.length;
   return {
@@ -158,6 +165,10 @@ function renderLegend() {
   var html = '';
   if (state.colourMode === 'confidence') {
     html = '<b>AI confidence</b><div class="ramp"></div><div class="ramp-lbl"><span>low</span><span>0.5</span><span>0.7</span><span>high</span></div>';
+  } else if (state.colourMode === 'record') {
+    html = '<b>Existing record</b>' + Object.keys(RECORD).map(function (k) {
+      return '<div><span class="sw" style="background:' + RECORD[k].color + '"></span>' + RECORD[k].label + '</div>';
+    }).join('') + '<div><span class="sw" style="background:#5C6B63"></span>Not compared yet</div>';
   } else if (state.colourMode === 'landcover') {
     html = '<b>Land cover</b>' + Object.keys(LANDCOVER).map(function (k) {
       return '<div><span class="sw" style="background:' + LANDCOVER[k] + '"></span>' + esc(k) + '</div>';
@@ -238,6 +249,7 @@ function openSurvey(sid) {
     renderLegend();
     renderTabs();
     $('loadingScreen').style.display = 'none';
+    document.dispatchEvent(new CustomEvent('wb:survey-opened', {detail: {sid: sid, base: base}}));
   }).catch(function (e) {
     $('loadingScreen').textContent = 'Could not load survey: ' + e.message;
   });
@@ -442,8 +454,10 @@ function renderTabs() {
   $('issueCount').textContent = nIssues;
   $('issueCount').classList.toggle('warn', nIssues > 0);
   var body = $('tabBody');
-  body.innerHTML = ({overview: overviewHtml, review: reviewHtml, issues: issuesHtml, export: exportHtml})[state.tab]();
+  var renderer = TAB_RENDERERS[state.tab] || overviewHtml;
+  body.innerHTML = renderer();
   wireTab(body);
+  if (TAB_WIRERS[state.tab]) TAB_WIRERS[state.tab](body);
 }
 
 function overviewHtml() {
@@ -631,6 +645,22 @@ function wireTab(body) {
     });
   });
 }
+
+// ---------------------------------------------------------------- extension points (records.js, ...)
+var TAB_RENDERERS = {overview: overviewHtml, review: reviewHtml, issues: issuesHtml, export: exportHtml};
+var TAB_WIRERS = {};
+window.WB = {
+  state: state, map: map, esc: esc, fmt: fmt, api: api, toast: toast, zoomTo: zoomTo,
+  selectParcel: selectParcel, parcelById: parcelById, restyle: restyle, renderTabs: renderTabs,
+  buildParcelLayer: buildParcelLayer, setSave: setSave, RECORD: RECORD,
+  layersControl: function () { return layersControl; },
+  registerTab: function (name, render, wire) { TAB_RENDERERS[name] = render; if (wire) TAB_WIRERS[name] = wire; },
+  reloadParcels: function () {
+    return fetch('/surveys/' + encodeURIComponent(state.sid) + '/parcels.geojson', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (fc) { state.parcels = fc; buildParcelLayer(); restyle(); });
+  }
+};
 
 // ---------------------------------------------------------------- wiring
 document.querySelectorAll('.tabs button').forEach(function (b) {

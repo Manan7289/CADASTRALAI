@@ -15,7 +15,7 @@ from pyproj import CRS
 from shapely.ops import unary_union
 
 EXPORT_FIELDS = ["parcel_id", "prov_pin", "area_m2", "perim_m", "landcover", "built_pct",
-                 "road_front", "confidence", "status", "source", "issues"]
+                 "road_front", "confidence", "status", "source", "issues", "rec_status", "rec_iou", "rec_ref"]
 
 
 def utm_crs_for(lon, lat):
@@ -30,7 +30,8 @@ def parcels_to_gdf(parcels_fc):
     gdf["geometry"] = gdf.geometry.make_valid().map(
         lambda g: unary_union([p for p in getattr(g, "geoms", [g]) if p.geom_type in ("Polygon", "MultiPolygon")]))
     gdf = gdf[~gdf.geometry.is_empty]
-    rename = {"id": "parcel_id", "perimeter_m": "perim_m", "road_frontage": "road_front"}
+    rename = {"id": "parcel_id", "perimeter_m": "perim_m", "road_frontage": "road_front",
+              "record_status": "rec_status", "record_iou": "rec_iou", "record_ref_id": "rec_ref"}
     gdf = gdf.rename(columns=rename)
     for col in EXPORT_FIELDS:
         if col not in gdf.columns:

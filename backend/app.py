@@ -21,7 +21,9 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
+import compare
 import intake
+import reference
 import survey
 import upload_pipeline
 from export import export as export_parcels
@@ -129,6 +131,54 @@ def serve_survey(sid, filename):
     resp = send_from_directory(d, filename)
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+
+# ---------------------------------------------------------------- reference data + comparison
+@app.route("/api/surveys/<sid>/reference")
+def api_reference_status(sid):
+    try:
+        return jsonify(reference.status(sid))
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+
+
+@app.route("/api/surveys/<sid>/reference/<kind>", methods=["POST", "DELETE"])
+def api_reference_import(sid, kind):
+    if kind not in ("parcels", "gnss"):
+        return jsonify({"error": "kind must be parcels or gnss."}), 400
+    try:
+        if request.method == "DELETE":
+            reference.clear(sid, kind)
+            return jsonify(reference.status(sid))
+        f = request.files.get("file")
+        if f is None or not f.filename:
+            return jsonify({"error": "No file uploaded."}), 400
+        if kind == "parcels":
+            reference.import_parcels(sid, f, id_field=(request.form.get("id_field") or "").strip() or None)
+        else:
+            reference.import_gnss(sid, f, epsg=(request.form.get("epsg") or "").strip() or None)
+        return jsonify(reference.status(sid))
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Could not read that file: {e}"}), 400
+
+
+@app.route("/api/surveys/<sid>/compare", methods=["POST"])
+def api_compare(sid):
+    body = request.get_json(silent=True) or {}
+    try:
+        tol = float(body.get("tolerance_m", 1.0))
+        result = compare.compare(sid, tolerance_m=tol)
+        compare.annotate_parcels(sid, result)
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result)
 
 
 # ---------------------------------------------------------------- new survey intake

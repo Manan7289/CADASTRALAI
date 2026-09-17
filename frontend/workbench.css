@@ -86,3 +86,4 @@
 .toast.error{border-color:var(--critical);color:var(--critical);}
 .parcel-label{background:transparent;border:none;box-shadow:none;color:#fff;font-family:var(--font-mono);font-size:10px;text-shadow:0 0 3px #000,0 0 2px #000;}
 .parcel-label:before{display:none;}
+.rec-input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:7px 9px;color:var(--text);font-family:var(--font-mono);font-size:0.74rem;}
