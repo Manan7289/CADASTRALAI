@@ -81,9 +81,9 @@ function currentFc(){ return state.source==='model' ? state.modelFc : state.osmF
 
 function severityOf(props){
   var alerts = props.alerts || [];
-  if(alerts.some(a=>ALERT_META[a.type].sev==='critical')) return 'critical';
-  if(alerts.some(a=>ALERT_META[a.type].sev==='warning')) return 'warning';
-  if(alerts.some(a=>ALERT_META[a.type].sev==='change')) return 'change';
+  if(alerts.some(a=>(ALERT_META[a.type] && ALERT_META[a.type].sev==='critical'))) return 'critical';
+  if(alerts.some(a=>(ALERT_META[a.type] && ALERT_META[a.type].sev==='warning'))) return 'warning';
+  if(alerts.some(a=>(ALERT_META[a.type] && ALERT_META[a.type].sev==='change'))) return 'change';
   return 'ok';
 }
 
@@ -149,7 +149,7 @@ function renderSidebar(){
   html += '<div><h3 class="panel-title">Field Verification Queue</h3>';
   priority.forEach(function(f){
     var al = f.properties.alerts||[];
-    var dots = al.map(a=>'<span class="dot" style="background:'+SEV_COLOR[ALERT_META[a.type].sev]+'"></span>').join('');
+    var dots = al.map(a=>'<span class="dot" style="background:'+SEV_COLOR[(ALERT_META[a.type]||{}).sev||'ok']+'"></span>').join('');
     html += '<div class="queue-row" data-id="'+f.properties.id+'"><span class="id">#'+f.properties.id+'</span><span class="dots">'+dots+'</span><span class="area">'+(f.properties.area_m2||0)+' m²</span></div>';
   });
   html += '</div>';
@@ -184,8 +184,8 @@ function renderDetail(){
   if(alerts.length){
     html += '<div class="findings">';
     alerts.forEach(function(a){
-      var mm = ALERT_META[a.type];
-      html += '<div class="finding sev-'+mm.sev+'">'+iconSvg(mm.shape,mm.sev,18)+'<div><b>'+mm.label+'</b><p>'+a.msg+'</p><div class="cite">'+a.citation+'</div></div></div>';
+      var mm = ALERT_META[a.type] || {label: a.type || 'Notice', shape:'circle', sev:'warning'};
+      html += '<div class="finding sev-'+mm.sev+'">'+iconSvg(mm.shape,mm.sev,18)+'<div><b>'+mm.label+'</b><p>'+(a.msg||'')+'</p><div class="cite">'+(a.citation||'')+'</div></div></div>';
     });
     html += '</div>';
   } else {

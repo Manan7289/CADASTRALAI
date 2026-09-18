@@ -39,12 +39,30 @@ RAW_UPLOADS_DIR = BASE_DIR / "data" / "raw" / "uploads"
 app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = 300 * 1024 * 1024  # 300MB, generous for a short drone video
 
+ALLOWED_EXTS = {
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp", ".bmp",
+    ".mp4", ".mov", ".avi", ".mkv", ".webm"
+}
+
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    return response
+
 
 @app.route("/api/process", methods=["POST"])
 def api_process():
     file = request.files.get("file")
     if file is None or file.filename == "":
         return jsonify({"error": "No file uploaded."}), 400
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_EXTS:
+        return jsonify({"error": f"Unsupported format '{ext}'. Upload an image (.png, .jpg, .tif) or video (.mp4, .mov)."}), 400
+
     try:
         center_lat = float(request.form["center_lat"])
         center_lon = float(request.form["center_lon"])
@@ -74,7 +92,7 @@ def api_inspect_drone():
     if file is None or file.filename == "":
         return jsonify({"error": "No file provided."}), 400
     RAW_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    tmp_path = RAW_UPLOADS_DIR / ("inspect_" + secure_filename(file.filename))
+    tmp_path = RAW_UPLOADS_DIR / (f"inspect_{uuid.uuid4().hex[:8]}_" + secure_filename(file.filename))
     file.save(tmp_path)
     try:
         exif = drone_utils.extract_drone_exif(tmp_path)
