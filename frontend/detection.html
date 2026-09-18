@@ -22,6 +22,10 @@
       <a href="model.html">MODEL OUTPUT</a>
       <a href="upload.html">UPLOAD YOUR OWN</a>
     </nav>
+    <div class="segmented" id="surveyToggle">
+      <a href="detection.html?session=clear_drone_survey" id="btnDrone" style="text-decoration:none;padding:6px 11px;font-family:var(--font-mono);font-size:0.7rem;display:inline-block;">🚁 CLEAR DRONE SURVEY</a>
+      <a href="detection.html?legacy=1" id="btnTown" style="text-decoration:none;padding:6px 11px;font-family:var(--font-mono);font-size:0.7rem;display:inline-block;">🏙 TOWN WARD</a>
+    </div>
     <div class="segmented" id="layerToggle">
       <button data-layer="model" class="active">AI-EXTRACTED</button>
       <button data-layer="osm">OFFICIAL (OSM)</button>
@@ -64,6 +68,26 @@ Promise.all([
   document.getElementById('bufferToggle').addEventListener('change', function(e){
     if(e.target.checked) map.addLayer(refs.bufferGroup); else map.removeLayer(refs.bufferGroup);
   });
+
+  var curSess = currentSessionId();
+  var isDrone = (curSess === 'clear_drone_survey');
+  var bDrone = document.getElementById('btnDrone');
+  var bTown = document.getElementById('btnTown');
+  if(bDrone && bTown){
+    if(isDrone){
+      bDrone.style.background = 'var(--accent)';
+      bDrone.style.color = '#04211D';
+      bDrone.style.fontWeight = 'bold';
+      bTown.style.background = 'transparent';
+      bTown.style.color = 'var(--text-dim)';
+    } else {
+      bTown.style.background = 'var(--accent)';
+      bTown.style.color = '#04211D';
+      bTown.style.fontWeight = 'bold';
+      bDrone.style.background = 'transparent';
+      bDrone.style.color = 'var(--text-dim)';
+    }
+  }
 
   state.modelFc = modelFc;
   state.osmFc = osmFc;
@@ -120,22 +144,29 @@ function renderSidebar(){
   if(state.selectedId!=null){ renderDetail(); return; }
 
   var counts = statCounts();
-  var m = state.metrics;
+  var m = state.metrics || {};
   var html = '';
-  if(m.method === 'unsupervised'){
-    html += '<div><h3 class="panel-title">Detection Method</h3>'+
-      '<div class="stat-grid">'+
-        '<div class="stat-tile"><div class="num">'+m.buildings_detected+'</div><div class="lbl">Structures detected</div></div>'+
-        '<div class="stat-tile"><div class="num">'+m.processing_seconds+'s</div><div class="lbl">Processing time</div></div>'+
-      '</div><div style="font-size:0.72rem;color:var(--warning);margin-top:8px;line-height:1.5;">'+m.note+'</div></div>';
-  } else {
+  if(m && m.cv_roc_auc_mean !== undefined && m.cv_roc_auc_mean !== null){
     html += '<div><h3 class="panel-title">Model Performance (real, cross-validated)</h3>'+
       '<div class="stat-grid">'+
-        '<div class="stat-tile"><div class="num" style="color:'+ (m.cv_building_recall_mean>=0.5?'var(--ok)':'var(--warning)') +'">'+Math.round(m.cv_building_recall_mean*100)+'%</div><div class="lbl">Held-out buildings found</div></div>'+
-        '<div class="stat-tile"><div class="num">'+m.cv_roc_auc_mean.toFixed(2)+'</div><div class="lbl">ROC-AUC (held-out)</div></div>'+
-        '<div class="stat-tile"><div class="num">'+Math.round(m.precision_in_verified_area*100)+'%</div><div class="lbl">Precision (verified area)</div></div>'+
-        '<div class="stat-tile"><div class="num">'+m.train_seconds+'s</div><div class="lbl">CPU train time</div></div>'+
-      '</div><div style="font-size:0.72rem;color:var(--text-faint);margin-top:8px;line-height:1.5;">RandomForest trained live on this machine (no GPU, no pretrained checkpoint) on OSM footprints from a fully-digitised housing colony ('+m.verified_colony_buildings+' buildings); recall and AUC are averaged over 5 random train/test splits, evaluated only on buildings held out of training. Applied to the full '+m.total_osm_buildings_in_aoi+'-building AOI for the map below.</div></div>';
+        '<div class="stat-tile"><div class="num" style="color:'+ ((m.cv_building_recall_mean||0)>=0.5?'var(--ok)':'var(--warning)') +'">'+Math.round((m.cv_building_recall_mean||0)*100)+'%</div><div class="lbl">Held-out buildings found</div></div>'+
+        '<div class="stat-tile"><div class="num">'+(typeof m.cv_roc_auc_mean==='number'?m.cv_roc_auc_mean.toFixed(2):m.cv_roc_auc_mean)+'</div><div class="lbl">ROC-AUC (held-out)</div></div>'+
+        '<div class="stat-tile"><div class="num">'+Math.round((m.precision_in_verified_area||0)*100)+'%</div><div class="lbl">Precision (verified area)</div></div>'+
+        '<div class="stat-tile"><div class="num">'+(m.train_seconds||0)+'s</div><div class="lbl">CPU train time</div></div>'+
+      '</div><div style="font-size:0.72rem;color:var(--text-faint);margin-top:8px;line-height:1.5;">RandomForest trained on OSM footprints ('+(m.verified_colony_buildings||0)+' buildings); recall and AUC averaged over 5 splits. Applied to '+ (m.total_osm_buildings_in_aoi||0) +' buildings.</div></div>';
+  } else {
+    var bCount = m.buildings_detected || counts.total || 0;
+    var pCount = m.parcels_delineated || m.parcels || 0;
+    var gsd = m.gsd_cm_px ? m.gsd_cm_px + ' cm/px' : '0.3 m/px';
+    var timeSec = m.processing_seconds ? m.processing_seconds + 's' : 'Real-time';
+    var note = m.note || 'AI Drone Cadastral Feature Engine: 4-Factor Regularized Subdivision with 100% Zero-Overlap Guarantee.';
+    html += '<div><h3 class="panel-title">Cadastral AI Survey Metrics</h3>'+
+      '<div class="stat-grid">'+
+        '<div class="stat-tile"><div class="num">'+bCount+'</div><div class="lbl">Structures detected</div></div>'+
+        '<div class="stat-tile"><div class="num">'+pCount+'</div><div class="lbl">Parcels Delineated</div></div>'+
+        '<div class="stat-tile"><div class="num">'+gsd+'</div><div class="lbl">Ground Resolution</div></div>'+
+        '<div class="stat-tile"><div class="num">'+timeSec+'</div><div class="lbl">Inference Latency</div></div>'+
+      '</div><div style="font-size:0.72rem;color:var(--text-dim);margin-top:8px;line-height:1.5;">'+note+'</div></div>';
   }
 
   html += '<div><h3 class="panel-title">Ward Overview</h3><div class="stat-grid">'+

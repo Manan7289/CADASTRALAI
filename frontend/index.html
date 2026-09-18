@@ -200,7 +200,9 @@ function renderParcelDetail(){
       '<div class="kv"><div class="k">Coverage (GCR)</div><div class="v">'+(p.ground_coverage_ratio_pct||0)+'%</div></div>';
   }
 
-  html += '<div class="kv" style="grid-column:1/-1;"><div class="k">GPS centroid (approx.)</div><div class="v">'+p.gps_lat.toFixed(5)+'° N, '+p.gps_lon.toFixed(5)+'° E</div></div>'+
+  var latStr = (p.gps_lat != null && typeof p.gps_lat === 'number') ? p.gps_lat.toFixed(5) : (p.gps_lat || '0.00000');
+  var lonStr = (p.gps_lon != null && typeof p.gps_lon === 'number') ? p.gps_lon.toFixed(5) : (p.gps_lon || '0.00000');
+  html += '<div class="kv" style="grid-column:1/-1;"><div class="k">GPS centroid (approx.)</div><div class="v">'+latStr+'° N, '+lonStr+'° E</div></div>'+
   '</div>';
 
   html += '<div style="margin:14px 0;">'+
@@ -213,7 +215,9 @@ function renderParcelDetail(){
       '<table style="width:100%;border-collapse:collapse;font-size:0.72rem;font-family:var(--font-mono);">'+
       '<tr style="color:var(--text-faint);border-bottom:1px solid var(--border-soft);"><th style="text-align:left;padding:3px;">Pt</th><th style="text-align:left;padding:3px;">Coordinates</th><th style="text-align:right;padding:3px;">Side Length</th></tr>';
     p.traverse_points.slice(0, 8).forEach(function(t){
-      html += '<tr style="border-bottom:1px solid var(--border-soft);"><td style="padding:4px 3px;color:var(--accent);font-weight:bold;">'+t.point_id+'</td><td style="padding:4px 3px;">'+t.lat.toFixed(5)+'°N, '+t.lon.toFixed(5)+'°E</td><td style="padding:4px 3px;text-align:right;">'+t.segment_length_m+'m</td></tr>';
+      var tLat = (t.lat != null && typeof t.lat === 'number') ? t.lat.toFixed(5) : (t.lat || '0.00000');
+      var tLon = (t.lon != null && typeof t.lon === 'number') ? t.lon.toFixed(5) : (t.lon || '0.00000');
+      html += '<tr style="border-bottom:1px solid var(--border-soft);"><td style="padding:4px 3px;color:var(--accent);font-weight:bold;">'+t.point_id+'</td><td style="padding:4px 3px;">'+tLat+'°N, '+tLon+'°E</td><td style="padding:4px 3px;text-align:right;">'+t.segment_length_m+'m</td></tr>';
     });
     html += '</table></div>';
   }
