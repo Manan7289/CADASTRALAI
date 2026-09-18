@@ -200,8 +200,8 @@ for i, (ang, (pt1, pt2)) in enumerate(street_segs[:50]):
                      "coordinates": [list(px_to_lonlat(*pt1)), list(px_to_lonlat(*pt2))]},
     })
 
-# ── 8. Extract Discrete Landcover Entities (Trees, Farms, Barren Land) ──────
-print("STEP 6: Extract Discrete Landcover Entities (Trees, Farms, Barren Land)")
+# ── 8. Extract Discrete Landcover Entities (Forest, Farms, Barren Land) ─────
+print("STEP 6: Extract Discrete Landcover Entities (Forest, Farms, Barren Land)")
 landcover_entities = vegetation_index.extract_discrete_landcover_entities(
     img_bgr=img_bgr,
     px_to_lonlat_fn=px_to_lonlat,
@@ -210,7 +210,7 @@ landcover_entities = vegetation_index.extract_discrete_landcover_entities(
     building_features=bldg_features,
     road_features=road_lines_geo,
 )
-trees_fc = landcover_entities["trees_fc"]
+forest_fc = landcover_entities["forest_fc"]
 farms_fc = landcover_entities["farms_fc"]
 barren_fc = landcover_entities["barren_fc"]
 vegetation_fc = landcover_entities["vegetation_fc"]
@@ -247,7 +247,7 @@ buildings_fc = {"type": "FeatureCollection", "features": bldg_features}
         "gsd_m":          0.3,
         "parcels_count":   len(parcels_list),
         "buildings_count": len(bldg_features),
-        "trees_count":     len(trees_fc["features"]),
+        "forest_count":    len(forest_fc["features"]),
         "farms_count":     len(farms_fc["features"]),
         "barren_count":    len(barren_fc["features"]),
     },
@@ -256,7 +256,7 @@ buildings_fc = {"type": "FeatureCollection", "features": bldg_features}
 
 (OUT_DIR / "parcels.geojson").write_text(json.dumps(parcels_fc, indent=2))
 (OUT_DIR / "buildings.geojson").write_text(json.dumps(buildings_fc, indent=2))
-(OUT_DIR / "trees.geojson").write_text(json.dumps(trees_fc, indent=2))
+(OUT_DIR / "forest.geojson").write_text(json.dumps(forest_fc, indent=2))
 (OUT_DIR / "farms.geojson").write_text(json.dumps(farms_fc, indent=2))
 (OUT_DIR / "barren_land.geojson").write_text(json.dumps(barren_fc, indent=2))
 (OUT_DIR / "vegetation.geojson").write_text(json.dumps(vegetation_fc, indent=2))
@@ -267,7 +267,7 @@ buildings_fc = {"type": "FeatureCollection", "features": bldg_features}
 # Also copy to data/processed for legacy endpoints
 PROC_DIR = BASE_DIR / "data" / "processed"
 if PROC_DIR.exists():
-    (PROC_DIR / "trees.geojson").write_text(json.dumps(trees_fc, indent=2))
+    (PROC_DIR / "forest.geojson").write_text(json.dumps(forest_fc, indent=2))
     (PROC_DIR / "farms.geojson").write_text(json.dumps(farms_fc, indent=2))
     (PROC_DIR / "barren_land.geojson").write_text(json.dumps(barren_fc, indent=2))
     (PROC_DIR / "vegetation.geojson").write_text(json.dumps(vegetation_fc, indent=2))
@@ -281,14 +281,14 @@ cadastral_standards.export_cadastral_dxf(parcels_fc, buildings_fc, OUT_DIR / "ca
     "layers": {
         "parcels":      "parcels.geojson",
         "buildings":    "buildings.geojson",
-        "trees":        "trees.geojson",
+        "forest":       "forest.geojson",
         "farms":        "farms.geojson",
         "barren_land":  "barren_land.geojson",
         "vegetation":   "vegetation.geojson",
         "roads":        "roads.geojson",
         "dxf":          "cadastral_survey.dxf",
     },
-    "extracted_trees": trees_fc,
+    "extracted_forest": forest_fc,
     "extracted_farms": farms_fc,
     "extracted_barren": barren_fc,
     "extracted_vegetation": vegetation_fc,
@@ -300,8 +300,9 @@ print("\n" + "=" * 60)
 print("COMPLETE — Rectilinear Cadastral Subdivision & Landcover Identification")
 print(f"  Parcels    : {len(parcels_list)}")
 print(f"  Buildings  : {len(bldg_features)}")
-print(f"  Trees      : {len(trees_fc['features'])}")
+print(f"  Forest Zones: {len(forest_fc['features'])}")
 print(f"  Farm Plots : {len(farms_fc['features'])}")
 print(f"  Barren Land: {len(barren_fc['features'])}")
 print(f"  Output     : {OUT_DIR}")
 print("=" * 60)
+

@@ -138,12 +138,12 @@ function loadBaseLayers(map, meta, imgBlob, layers){
     }).addTo(vegGroup);
   }
 
-  // Drone extracted tree canopy & orchards
-  var treesGroup = L.layerGroup();
-  if(layers.extracted_trees && layers.extracted_trees.features && layers.extracted_trees.features.length > 0){
-    L.geoJSON(layers.extracted_trees, {
-      style:{color:'#2D6A4F', weight:1.5, fillOpacity:0.25, fillColor:'#2D6A4F'}
-    }).addTo(treesGroup);
+  // Drone extracted forest zones / dense canopy patches
+  var forestGroup = L.layerGroup();
+  if(layers.extracted_forest && layers.extracted_forest.features && layers.extracted_forest.features.length > 0){
+    L.geoJSON(layers.extracted_forest, {
+      style:{color:'#1A4D2E', weight:1.8, fillOpacity:0.30, fillColor:'#2A5C3F'}
+    }).addTo(forestGroup);
   }
 
   // Drone extracted barren land / bare soil
@@ -170,5 +170,5 @@ function loadBaseLayers(map, meta, imgBlob, layers){
     L.geoJSON(layers.waterway, {style:{color:'#E2685F', weight:14, opacity:0.10}}).addTo(bufferGroup);
   }
 
-  return {refLayerGroup: refLayerGroup, bufferGroup: bufferGroup, treesGroup: treesGroup, barrenGroup: barrenGroup, vegGroup: vegGroup};
+  return {refLayerGroup: refLayerGroup, bufferGroup: bufferGroup, forestGroup: forestGroup, barrenGroup: barrenGroup, vegGroup: vegGroup};
 }

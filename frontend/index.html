@@ -29,7 +29,7 @@
     <div class="segmented" id="layerControlBar" style="display:flex;align-items:center;padding:2px 8px;gap:8px;">
       <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="parcelToggle" checked> Parcels</label>
       <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="buildingToggle" checked> 🏠 Bldgs</label>
-      <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="treeToggle" checked> 🌳 Trees</label>
+      <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="forestToggle" checked> 🌲 Forest</label>
       <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="farmToggle" checked> 🌾 Farms</label>
       <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="barrenToggle" checked> 🏜️ Barren</label>
       <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="bufferToggle" checked> Buffers</label>
@@ -58,11 +58,11 @@ var state = {
   selectedParcelId: null,
   parcelsFc: null,
   buildingsFc: null,
-  treesFc: null,
+  forestFc: null,
   farmsFc: null,
   barrenFc: null
 };
-var parcelLayer, buildingLayer, treeLayer, farmLayer, barrenLayer;
+var parcelLayer, buildingLayer, forestLayer, farmLayer, barrenLayer;
 
 Promise.all([
   fetch(dataUrl('meta.json')).then(r=>r.json()),
@@ -70,13 +70,13 @@ Promise.all([
   fetch(dataUrl('layers.json')).then(r=>r.json()),
   fetch(dataUrl('parcels.geojson')).then(r=>r.json()),
   fetch(dataUrl('buildings.geojson')).then(r=>r.json()),
-  fetch(dataUrl('trees.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
+  fetch(dataUrl('forest.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
   fetch(dataUrl('farms.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
   fetch(dataUrl('barren_land.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]}))
 ]).then(function(res){
   var meta = res[0], imgBlob = res[1], layers = res[2];
   var parcelsFc = res[3], buildingsFc = res[4];
-  var treesFc = res[5] || {type:'FeatureCollection',features:[]};
+  var forestFc = res[5] || {type:'FeatureCollection',features:[]};
   var farmsFc = res[6] || {type:'FeatureCollection',features:[]};
   var barrenFc = res[7] || {type:'FeatureCollection',features:[]};
 
@@ -108,7 +108,7 @@ Promise.all([
   }
   state.parcelsFc = parcelsFc;
   state.buildingsFc = buildingsFc;
-  state.treesFc = treesFc;
+  state.forestFc = forestFc;
   state.farmsFc = farmsFc;
   state.barrenFc = barrenFc;
 
@@ -129,18 +129,18 @@ Promise.all([
     style: {color: '#7F5539', weight: 1.5, fillColor: '#BFA27E', fillOpacity: 0.40},
     onEachFeature: function(f, layer){
       var p = f.properties;
-      var tip = '<b>🏜️ ' + (p.uid || ('Barren #' + p.id)) + '</b><br>Area: ' + (p.area_guntha || 0) + ' Guntha (' + (p.area_m2 || 0) + ' m²)<br>Soil Tone (STI): ' + (p.spectral_sti || 'Dry Earth');
+      var tip = '<b>🏜️ ' + (p.uid || ('Barren #' + p.id)) + '</b><br>Area: ' + (p.area_guntha || 0) + ' Guntha (' + (p.area_m2 || 0) + ' m²)<br>Soil Tone (STI): ' + (p.soil_tone_index || 'Dry Earth');
       layer.bindTooltip(tip, {sticky: true, direction: 'top'});
     }
   }).addTo(map);
 
-  // Discrete Tree Canopy Layer
-  treeLayer = L.geoJSON(treesFc, {
+  // Discrete Forest Canopy Layer
+  forestLayer = L.geoJSON(forestFc, {
     interactive: true,
-    style: {color: '#1B4332', weight: 1.2, fillColor: '#2D6A4F', fillOpacity: 0.65},
+    style: {color: '#1A4D2E', weight: 1.5, fillColor: '#2A5C3F', fillOpacity: 0.65},
     onEachFeature: function(f, layer){
       var p = f.properties;
-      var tip = '<b>🌳 ' + (p.uid || ('Tree #' + p.id)) + '</b><br>Crown: ' + (p.crown_area_m2 || 0) + ' m² (' + (p.crown_diameter_m || 0) + 'm dia)<br>Spectral ExG: ' + (p.spectral_exg || 0);
+      var tip = '<b>🌲 ' + (p.uid || ('Forest #' + p.id)) + '</b><br>Area: ' + (p.area_guntha || 0) + ' Guntha (' + (p.area_acres || 0) + ' Ac)<br>' + (p.forest_type || 'Forest Zone') + '<br>Density: ' + Math.round((p.forest_density || 0) * 100) + '%';
       layer.bindTooltip(tip, {sticky: true, direction: 'top'});
     }
   }).addTo(map);
@@ -160,9 +160,9 @@ Promise.all([
     if(e.target.checked) { if(!map.hasLayer(buildingLayer)) map.addLayer(buildingLayer); }
     else { if(map.hasLayer(buildingLayer)) map.removeLayer(buildingLayer); }
   });
-  document.getElementById('treeToggle').addEventListener('change', function(e){
-    if(e.target.checked) { if(!map.hasLayer(treeLayer)) map.addLayer(treeLayer); }
-    else { if(map.hasLayer(treeLayer)) map.removeLayer(treeLayer); }
+  document.getElementById('forestToggle').addEventListener('change', function(e){
+    if(e.target.checked) { if(!map.hasLayer(forestLayer)) map.addLayer(forestLayer); }
+    else { if(map.hasLayer(forestLayer)) map.removeLayer(forestLayer); }
   });
   document.getElementById('farmToggle').addEventListener('change', function(e){
     if(e.target.checked) { if(!map.hasLayer(farmLayer)) map.addLayer(farmLayer); }
@@ -215,7 +215,7 @@ function renderSidebar(){
   var parcels = state.parcelsFc.features;
   var landlocked = parcels.filter(f => !f.properties.road_connected);
   var unrecordedParcels = parcels.filter(f => f.properties.has_unrecorded_building);
-  var treeCount = (state.treesFc && state.treesFc.features) ? state.treesFc.features.length : 0;
+  var forestCount = (state.forestFc && state.forestFc.features) ? state.forestFc.features.length : 0;
   var farmCount = (state.farmsFc && state.farmsFc.features) ? state.farmsFc.features.length : 0;
   var barrenCount = (state.barrenFc && state.barrenFc.features) ? state.barrenFc.features.length : 0;
   var bldgCount = (state.buildingsFc && state.buildingsFc.features) ? state.buildingsFc.features.length : 0;
@@ -226,7 +226,7 @@ function renderSidebar(){
   html += '<div><h3 class="panel-title">Ward Overview</h3><div class="stat-grid">'+
     '<div class="stat-tile"><div class="num">'+parcels.length+'</div><div class="lbl">Land parcels mapped</div></div>'+
     '<div class="stat-tile"><div class="num">'+bldgCount+'</div><div class="lbl">Buildings inside them</div></div>'+
-    '<div class="stat-tile"><div class="num" style="color:#2D6A4F">'+treeCount+'</div><div class="lbl">🌳 Trees identified</div></div>'+
+    '<div class="stat-tile"><div class="num" style="color:#2A5C3F">'+forestCount+'</div><div class="lbl">🌲 Forest zones</div></div>'+
     '<div class="stat-tile"><div class="num" style="color:#8FAE5D">'+farmCount+'</div><div class="lbl">🌾 Farm plots delineated</div></div>'+
     '<div class="stat-tile"><div class="num" style="color:#BFA27E">'+barrenCount+'</div><div class="lbl">🏜️ Barren land zones</div></div>'+
     '<div class="stat-tile"><div class="num" style="color:'+(unrecordedParcels.length?'var(--change)':'var(--ok)')+'">'+unrecordedParcels.length+'</div><div class="lbl">Hold unrecorded structures</div></div>'+
@@ -288,11 +288,11 @@ function renderParcelDetail(){
       '<div class="kv"><div class="k">Coverage (GCR)</div><div class="v">'+(p.ground_coverage_ratio_pct||0)+'%</div></div>';
   }
 
-  if(p.crop_cover_pct != null || p.tree_cover_pct != null || p.barren_cover_pct != null || p.cultivable_area_acres != null){
+  if(p.crop_cover_pct != null || p.barren_cover_pct != null || p.cultivable_area_acres != null){
     var cropStr = (p.crop_cover_pct != null ? p.crop_cover_pct + '%' : '0%');
     if(p.cultivable_area_acres) cropStr += ' (' + p.cultivable_area_acres + ' Ac)';
     html += '<div class="kv"><div class="k">🌾 Crop Cover</div><div class="v">'+cropStr+'</div></div>'+
-      '<div class="kv"><div class="k">🌳 Tree Canopy</div><div class="v">'+(p.tree_cover_pct||0)+'%</div></div>'+
+      '<div class="kv"><div class="k">🌲 Canopy Cover</div><div class="v">'+(p.tree_cover_pct||0)+'%</div></div>'+
       '<div class="kv"><div class="k">🏜️ Barren Soil</div><div class="v">'+(p.barren_cover_pct||0)+'%</div></div>';
   }
 

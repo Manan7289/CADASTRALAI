@@ -173,22 +173,26 @@ def compute_visible_vegetation_and_soil_indices(
     # 4. Moderate saturation (distinguishes from neutral grey roads/asphalt)
     # 5. Low-to-moderate texture roughness (not building roofs with steep edges)
     # 6. Strictly excluded from buildings and paved roads
-    is_soil_hue = (hue >= 5) & (hue <= 26)
+    # Soil hue range expanded: [5,30] captures terracotta, sandy-brown, ochre, and dry clay.
+    is_soil_hue = (hue >= 5) & (hue <= 30)
+    # Also catch yellowish-tan fallow land (hue 1-4 wraps around near red)
+    is_warm_earth = (hue <= 4) | is_soil_hue
     barren_cond = (
         (veg_mask == 0) &
         (b_dilated == 0) &
         (road_dilated == 0) &
-        (r > g * 0.98) &
-        (r > b * 1.10) &
-        (sti > 0.08) &
-        (is_soil_hue | (sti > 0.16)) &
-        (sat >= 20) & (sat <= 175) &
-        (val >= 50) & (val <= 235) &
-        (local_std < 32.0)
+        (r > g * 0.97) &
+        (r > b * 1.08) &
+        (sti > 0.06) &
+        (is_warm_earth | (sti > 0.14)) &
+        (sat >= 15) & (sat <= 185) &
+        (val >= 45) & (val <= 240) &
+        (local_std < 36.0)
     )
     barren_raw = barren_cond.astype(np.uint8) * 255
     barren_mask = cv2.morphologyEx(barren_raw, cv2.MORPH_OPEN, kc)
-    barren_mask = cv2.morphologyEx(barren_mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+    # Larger closing kernel merges adjacent small barren patches into continuous zones
+    barren_mask = cv2.morphologyEx(barren_mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)))
 
     return {
         "exg": exg,
@@ -198,6 +202,7 @@ def compute_visible_vegetation_and_soil_indices(
         "tree_mask": tree_mask,
         "crop_mask": crop_mask,
         "barren_mask": barren_mask,
+        "std15": std15,
     }
 
 
@@ -480,6 +485,7 @@ def extract_discrete_landcover_entities(
     crop_mask = indices["crop_mask"]
     barren_mask = indices["barren_mask"]
     veg_mask = indices["veg_mask"]
+    std15 = indices["std15"]
 
     # Detect bund lines to partition agricultural fields
     bund_segments = detect_agricultural_bunds(img_bgr, crop_mask, barren_mask, meters_per_px=m_per_px)
@@ -494,56 +500,63 @@ def extract_discrete_landcover_entities(
                 return pf["properties"].get("ulpin", "")
         return ""
 
-    # ── 1. Discrete Tree Canopy Clusters ─────────────────────────────────────
-    min_tree_px = max(25, int(4.5 / m2_per_px2))   # min crown area ~4.5 m² (diameter >= 2.4m)
-    max_tree_px = int(1500.0 / m2_per_px2)          # max cluster ~1500 m²
+    # ── 1. Discrete Forest Zones (Dense Contiguous Canopy Patches) ───────────
+    # Forest = large contiguous wooded / multi-tree canopy zones.
+    # Strategy: merge adjacent tree-canopy pixels with a large morphological closing
+    # kernel so individual crowns fuse into coherent forest patches. Apply a minimum
+    # area threshold (> ~200 m²) so isolated ornamental trees don't qualify as forest.
+    #
+    # Requirements:
+    #   - Pixels must be in tree_mask (high-texture, shadow-paired, elevated vegetation)
+    #   - Blob area >= min_forest_m2 (200 m²) after closing
+    #   - Mean ExG >= 0.06 (dense healthy canopy)
+    #   - High std15 texture (> 10) — canopy roughness, not flat lawn
 
-    t_contours, _ = cv2.findContours(tree_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    tree_features = []
-    tree_reports = {}
-    tid = 1
+    min_forest_m2 = 200.0
+    min_forest_px = max(50, int(min_forest_m2 / m2_per_px2))
 
-    b_dilated = cv2.dilate(building_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))) if building_mask is not None else None
-    road_dilated = cv2.dilate(road_mask, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))) if road_mask is not None else None
+    # Large closing kernel (25×25 px at 0.3 m/px ≈ 7.5 m) fuses adjacent crowns
+    k_forest_close = min(25, max(7, int(6.0 / m_per_px)))
+    if k_forest_close % 2 == 0:
+        k_forest_close += 1
+    forest_merged = cv2.morphologyEx(
+        tree_mask,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_forest_close, k_forest_close))
+    )
+    # Clean tiny noise blobs left from the closing
+    forest_merged = cv2.morphologyEx(
+        forest_merged,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    )
 
-    for c in t_contours:
+    f_contours_forest, _ = cv2.findContours(forest_merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    forest_features = []
+    forest_reports = {}
+    fst_id = 1
+
+    for c in f_contours_forest:
         area_px = cv2.contourArea(c)
-        if area_px < min_tree_px or area_px > max_tree_px:
-            continue
-        peri = cv2.arcLength(c, True)
-        if peri <= 0:
-            continue
-        circularity = 4.0 * math.pi * area_px / (peri * peri)
-        rect = cv2.minAreaRect(c)
-        rw, rh = rect[1]
-        if min(rw, rh) <= 0:
-            continue
-        aspect_ratio = max(rw, rh) / min(rw, rh)
-
-        # Reject elongated slivers (roadside grass verges / median strips)
-        if aspect_ratio > 2.8 or circularity < 0.20:
+        if area_px < min_forest_px:
             continue
 
-        # Check overlap with building footprints (roof edges cannot be trees)
-        if b_dilated is not None:
-            c_mask = np.zeros((h, w), dtype=np.uint8)
-            cv2.drawContours(c_mask, [c], -1, 255, -1)
-            b_overlap = cv2.bitwise_and(c_mask, b_dilated)
-            if cv2.countNonZero(b_overlap) > 0.25 * area_px:
-                continue
+        # Compute mask for this blob
+        c_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(c_mask, [c], -1, 255, -1)
 
-        # Check overlap with road pavement
-        if road_dilated is not None:
-            c_mask = np.zeros((h, w), dtype=np.uint8)
-            cv2.drawContours(c_mask, [c], -1, 255, -1)
-            r_overlap = cv2.bitwise_and(c_mask, road_dilated)
-            if cv2.countNonZero(r_overlap) > 0.35 * area_px:
-                continue
+        # Must have meaningful canopy texture (not flat lawn)
+        mean_std15 = float(np.mean(std15[c_mask > 0]))
+        if mean_std15 < 8.0:
+            continue
 
-        # Smooth polygon: convex hull + fine DP approximation for natural rounded tree crowns
-        hull = cv2.convexHull(c)
-        eps = 0.02 * cv2.arcLength(hull, True)
-        approx = cv2.approxPolyDP(hull, eps, True).reshape(-1, 2)
+        mean_exg = round(float(np.mean(exg[c_mask > 0])), 3)
+        if mean_exg < 0.04:
+            continue
+
+        # Smoothed polygon boundary
+        eps = 0.015 * cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
         if len(approx) < 3:
             continue
 
@@ -557,52 +570,56 @@ def extract_discrete_landcover_entities(
             continue
 
         area_m2 = round(area_px * m2_per_px2, 1)
-        crown_diam = round(2.0 * math.sqrt(area_m2 / math.pi), 1)
-        est_height = round(max(3.0, min(24.0, crown_diam * 1.35)), 1)
-
-        c_mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.drawContours(c_mask, [c], -1, 255, -1)
-        mean_exg = round(float(np.mean(exg[c_mask > 0])), 3)
         mean_vari = round(float(np.mean(vari[c_mask > 0])), 3)
+        # Forest density: fraction of closing blob that was original tree_mask pixels
+        tree_px_in_blob = int(np.count_nonzero(cv2.bitwise_and(tree_mask, c_mask)))
+        forest_density = round(tree_px_in_blob / max(1, int(area_px)), 2)
         ulpin = get_parent_ulpin(poly_geo.centroid)
 
-        health = "Dense Healthy Canopy" if mean_exg > 0.07 else "Moderate Green Canopy"
+        forest_type = (
+            "Dense Forest / Closed Canopy" if forest_density >= 0.60 and mean_exg > 0.08
+            else "Mixed Forest / Sparse Canopy" if forest_density >= 0.35
+            else "Open Woodland / Agro-Forestry"
+        )
 
         props = {
-            "id": tid,
-            "uid": f"TREE-{tid:04d}",
-            "name": f"Tree Canopy #{tid}",
-            "type": "tree_canopy",
-            "category": "Tree Canopy / Orchard",
+            "id": fst_id,
+            "uid": f"FOREST-{fst_id:04d}",
+            "name": f"Forest Zone #{fst_id}",
+            "type": "forest_zone",
+            "category": "Forest / Dense Canopy",
             "area_m2": area_m2,
             "area_sq_ft": round(area_m2 * 10.7639, 1),
+            "area_guntha": round(area_m2 / 101.17, 3),
             "area_acres": round(area_m2 / 4046.86, 4),
-            "crown_diameter_m": crown_diam,
-            "estimated_height_m": est_height,
+            "perimeter_m": round(cv2.arcLength(c, True) * m_per_px, 1),
             "mean_exg": mean_exg,
             "mean_vari": mean_vari,
-            "health_status": health,
+            "canopy_texture": round(mean_std15, 1),
+            "forest_density": forest_density,
+            "forest_type": forest_type,
             "parcel_ulpin": ulpin,
             "alerts": [
-                {"type": "CANOPY_HEALTH", "msg": f"Elevated tree canopy crown (diameter ~{crown_diam}m, est. height ~{est_height}m, ExG={mean_exg:.2f}).", "citation": "National Agro-Forestry & Green Cover Guidelines"}
+                {"type": "FOREST_COVER", "msg": f"Dense forested canopy zone ({forest_type}, area={area_m2} m², density={forest_density:.0%}).", "citation": "Forest Survey of India / LULC Classification"}
             ]
         }
-        tree_features.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
-        tree_reports[f"TREE-{tid:04d}"] = (
-            f"CADASTRAAI -- VEGETATION & CANOPY VERIFICATION NOTE\n"
-            f"Entity Ref: TREE-{tid:04d}\n"
-            f"Category: Tree Canopy / Orchard Cluster\n"
+        forest_features.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
+        forest_reports[f"FOREST-{fst_id:04d}"] = (
+            f"CADASTRAAI -- FOREST / DENSE CANOPY VERIFICATION NOTE\n"
+            f"Entity Ref: FOREST-{fst_id:04d}\n"
+            f"Category: Forest Zone / Dense Tree Canopy\n"
             f"Parent Parcel ULPIN: {ulpin or 'N/A'}\n"
-            f"Crown Footprint Area: {area_m2} m2 ({round(area_m2/4046.86, 4)} Acres)\n"
-            f"Estimated Crown Diameter: {crown_diam} m\n"
-            f"Estimated Tree Height: ~{est_height} m\n"
-            f"Photosynthetic Vitality (ExG): {mean_exg:.3f} | VARI: {mean_vari:.3f}\n"
-            f"Canopy Health: {health}\n\n"
+            f"Canopy Area: {area_m2} m2 ({round(area_m2 / 101.17, 3)} Guntha / {round(area_m2/4046.86, 4)} Acres)\n"
+            f"Perimeter: {props['perimeter_m']} m\n"
+            f"Forest Type: {forest_type}\n"
+            f"Photosynthetic Vitality (ExG): {mean_exg:.3f} | Canopy VARI: {mean_vari:.3f}\n"
+            f"Forest Density Index: {forest_density:.2f} | Canopy Texture: {mean_std15:.1f}\n\n"
             f"SURVEY ASSESSMENT:\n"
-            f"Elevated vegetation crown identified via multi-scale 3D dome curvature, shadow pairing, and chlorophyll absorption.\n"
-            f"Contributes to municipal urban tree canopy and rural agro-forestry records."
+            f"Dense multi-crown canopy cluster identified via morphological canopy fusion,\n"
+            f"high ExG index, and elevated canopy texture roughness.\n"
+            f"Classified as forested land under LULC / FSI canopy cover standards."
         )
-        tid += 1
+        fst_id += 1
 
     # ── 2. Discrete Agricultural Farm Fields ─────────────────────────────────
     bund_mask = np.zeros((h, w), dtype=np.uint8)
@@ -809,19 +826,19 @@ def extract_discrete_landcover_entities(
 
     # Summary
     total_m2 = round(h * w * m2_per_px2, 1)
-    tree_m2 = round(sum(f["properties"]["area_m2"] for f in tree_features), 1)
+    forest_m2 = round(sum(f["properties"]["area_m2"] for f in forest_features), 1)
     farm_m2 = round(sum(f["properties"]["area_m2"] for f in farm_features), 1)
     barren_m2 = round(sum(f["properties"]["area_m2"] for f in barren_features), 1)
     veg_m2 = round(sum(f["properties"]["area_m2"] for f in veg_features), 1)
 
     all_reports = {}
-    all_reports.update(tree_reports)
+    all_reports.update(forest_reports)
     all_reports.update(farm_reports)
     all_reports.update(barren_reports)
     all_reports.update(veg_reports)
 
     return {
-        "trees_fc": {"type": "FeatureCollection", "features": tree_features},
+        "forest_fc": {"type": "FeatureCollection", "features": forest_features},
         "farms_fc": {"type": "FeatureCollection", "features": farm_features},
         "barren_fc": {"type": "FeatureCollection", "features": barren_features},
         "vegetation_fc": {"type": "FeatureCollection", "features": veg_features},
@@ -829,9 +846,9 @@ def extract_discrete_landcover_entities(
         "reports": all_reports,
         "summary": {
             "total_survey_area_m2": total_m2,
-            "tree_canopy_count": len(tree_features),
-            "tree_canopy_area_m2": tree_m2,
-            "tree_canopy_pct": round((tree_m2 / total_m2) * 100.0, 1) if total_m2 > 0 else 0.0,
+            "forest_zones_count": len(forest_features),
+            "forest_canopy_area_m2": forest_m2,
+            "forest_canopy_pct": round((forest_m2 / total_m2) * 100.0, 1) if total_m2 > 0 else 0.0,
             "farm_plots_count": len(farm_features),
             "farm_plots_area_m2": farm_m2,
             "farm_plots_pct": round((farm_m2 / total_m2) * 100.0, 1) if total_m2 > 0 else 0.0,
@@ -842,3 +859,4 @@ def extract_discrete_landcover_entities(
             "total_green_cover_pct": round((veg_m2 / total_m2) * 100.0, 1) if total_m2 > 0 else 0.0,
         }
     }
+

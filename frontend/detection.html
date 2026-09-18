@@ -13,8 +13,8 @@
 <div class="app">
   <header class="topbar">
     <div class="brand">
-      <div class="wordmark">CADASTRA<span>AI</span></div>
-      <div class="subtitle">AI Feature Detection · Buildings, Trees, Farms &amp; Barren Land · Team ELAVI</div>
+      <div class="wordmark">CADASRA<span>AI</span></div>
+      <div class="subtitle">AI Feature Detection · Buildings, Forest, Farms &amp; Barren Land · Team ELAVI</div>
     </div>
     <nav class="segmented">
       <a href="index.html">CADASTRAL MAP</a>
@@ -29,7 +29,7 @@
     <div class="segmented" id="categoryFilter">
       <button data-cat="all" class="active">ALL</button>
       <button data-cat="building">🏠 BUILDINGS</button>
-      <button data-cat="tree">🌳 TREES</button>
+      <button data-cat="forest">🌲 FOREST</button>
       <button data-cat="farm">🌾 FARMS</button>
       <button data-cat="barren">🏜️ BARREN</button>
       <button data-cat="veg">🌿 VEG</button>
@@ -64,7 +64,7 @@ var state = {
   selectedFeature: null,
   modelFc: null,
   osmFc: null,
-  treesFc: null,
+  forestFc: null,
   farmsFc: null,
   barrenFc: null,
   vegFc: null,
@@ -81,7 +81,7 @@ Promise.all([
   fetch(dataUrl('osm_buildings.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
   fetch(dataUrl('metrics.json')).then(r=>r.json()).catch(()=>({})),
   fetch(dataUrl('reports.json')).then(r=>r.json()).catch(()=>({})),
-  fetch(dataUrl('trees.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
+  fetch(dataUrl('forest.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
   fetch(dataUrl('farms.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
   fetch(dataUrl('barren_land.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
   fetch(dataUrl('vegetation.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]}))
@@ -91,7 +91,7 @@ Promise.all([
   state.osmFc = res[4];
   state.metrics = res[5];
   state.reports = res[6] || {};
-  state.treesFc = res[7] || {type:'FeatureCollection',features:[]};
+  state.forestFc = res[7] || {type:'FeatureCollection',features:[]};
   state.farmsFc = res[8] || {type:'FeatureCollection',features:[]};
   state.barrenFc = res[9] || {type:'FeatureCollection',features:[]};
   state.vegFc = res[10] || {type:'FeatureCollection',features:[]};
@@ -138,7 +138,7 @@ function severityOf(props){
 
 function getFeatureCategory(f){
   var t = (f.properties && f.properties.type) || '';
-  if(t === 'tree_canopy') return 'tree';
+  if(t === 'forest_zone') return 'forest';
   if(t === 'farm_plot') return 'farm';
   if(t === 'barren_land') return 'barren';
   if(t === 'vegetation') return 'veg';
@@ -147,7 +147,7 @@ function getFeatureCategory(f){
 
 function getFeatureIcon(cat){
   switch(cat){
-    case 'tree': return '🌳';
+    case 'forest': return '🌲';
     case 'farm': return '🌾';
     case 'barren': return '🏜️';
     case 'veg': return '🌿';
@@ -164,8 +164,8 @@ function getFeatureStyle(f, isSelected){
   }
 
   switch(cat){
-    case 'tree':
-      return {color:'#1B4332', weight:1.5, fillColor:'#2D6A4F', fillOpacity:0.65};
+    case 'forest':
+      return {color:'#1A4D2E', weight:1.8, fillColor:'#2A5C3F', fillOpacity:0.70};
     case 'farm':
       return {color:'#40916C', weight:1.8, fillColor:'#8FAE5D', fillOpacity:0.55};
     case 'barren':
@@ -194,7 +194,7 @@ function renderFeatures(){
     collections.push(state.osmFc);
   } else {
     if(cat === 'all' || cat === 'building') collections.push(state.modelFc);
-    if(cat === 'all' || cat === 'tree') collections.push(state.treesFc);
+    if(cat === 'all' || cat === 'forest') collections.push(state.forestFc);
     if(cat === 'all' || cat === 'farm') collections.push(state.farmsFc);
     if(cat === 'all' || cat === 'barren') collections.push(state.barrenFc);
     if(cat === 'all' || cat === 'veg') collections.push(state.vegFc);
@@ -233,7 +233,7 @@ function getAllVisibleFeatures(){
   if((cat === 'all' || cat === 'building') && state.modelFc) feats.push(...state.modelFc.features);
   if((cat === 'all' || cat === 'farm') && state.farmsFc) feats.push(...state.farmsFc.features);
   if((cat === 'all' || cat === 'barren') && state.barrenFc) feats.push(...state.barrenFc.features);
-  if((cat === 'all' || cat === 'tree') && state.treesFc) feats.push(...state.treesFc.features);
+  if((cat === 'all' || cat === 'forest') && state.forestFc) feats.push(...state.forestFc.features);
   if((cat === 'all' || cat === 'veg') && state.vegFc) feats.push(...state.vegFc.features);
   return feats;
 }
@@ -246,7 +246,7 @@ function renderSidebar(){
 
   var m = state.metrics || {};
   var bCount = state.modelFc ? state.modelFc.features.length : 0;
-  var tCount = state.treesFc ? state.treesFc.features.length : 0;
+  var fstCount = state.forestFc ? state.forestFc.features.length : 0;
   var fCount = state.farmsFc ? state.farmsFc.features.length : 0;
   var barCount = state.barrenFc ? state.barrenFc.features.length : 0;
   var vegCount = state.vegFc ? state.vegFc.features.length : 0;
@@ -255,7 +255,7 @@ function renderSidebar(){
   html += '<div><h3 class="panel-title">Cadastral AI Vision Metrics</h3>'+
     '<div class="stat-grid">'+
       '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'building\')"><div class="num">'+bCount+'</div><div class="lbl">🏠 Structures</div></div>'+
-      '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'tree\')"><div class="num" style="color:#2D6A4F;">'+tCount+'</div><div class="lbl">🌳 Trees</div></div>'+
+      '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'forest\')"><div class="num" style="color:#2A5C3F;">'+fstCount+'</div><div class="lbl">🌲 Forest Zones</div></div>'+
       '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'farm\')"><div class="num" style="color:#8FAE5D;">'+fCount+'</div><div class="lbl">🌾 Farms</div></div>'+
       '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'barren\')"><div class="num" style="color:#BFA27E;">'+barCount+'</div><div class="lbl">🏜️ Barren</div></div>'+
     '</div><div style="font-size:0.72rem;color:var(--text-dim);margin-top:8px;line-height:1.5;">Automated Deep Vision &amp; Visible Remote Sensing Indices (ExG, VARI, STI). Click tiles to filter.</div></div>';

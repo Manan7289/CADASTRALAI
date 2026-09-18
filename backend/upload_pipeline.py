@@ -285,8 +285,7 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
     buildings_fc = {"type": "FeatureCollection", "features": bldg_features}
     parcels_fc = {"type": "FeatureCollection", "features": parcels_list}
 
-    # Structure compliance reports
-    # 5. Extract Discrete Landcover Entities (Trees, Farms, Barren Land, Vegetation)
+    # Structure & Landcover compliance reports  # 5. Extract Discrete Landcover Entities (Forest, Farms, Barren Land, Vegetation)
     landcover_entities = vegetation_index.extract_discrete_landcover_entities(
         img_bgr=img_bgr,
         px_to_lonlat_fn=px_to_lonlat,
@@ -295,7 +294,7 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         building_features=bldg_features,
         road_mask=features.get("roads_mask"),
     )
-    trees_fc = landcover_entities["trees_fc"]
+    forest_fc = landcover_entities["forest_fc"]
     farms_fc = landcover_entities["farms_fc"]
     barren_fc = landcover_entities["barren_fc"]
     vegetation_fc = landcover_entities["vegetation_fc"]
@@ -330,7 +329,7 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
     }), encoding="utf-8")
 
     (session_dir / "buildings.geojson").write_text(json.dumps(buildings_fc), encoding="utf-8")
-    (session_dir / "trees.geojson").write_text(json.dumps(trees_fc), encoding="utf-8")
+    (session_dir / "forest.geojson").write_text(json.dumps(forest_fc), encoding="utf-8")
     (session_dir / "farms.geojson").write_text(json.dumps(farms_fc), encoding="utf-8")
     (session_dir / "barren_land.geojson").write_text(json.dumps(barren_fc), encoding="utf-8")
     (session_dir / "vegetation.geojson").write_text(json.dumps(vegetation_fc), encoding="utf-8")
@@ -347,11 +346,11 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         "extracted_roads": roads_fc,
         "extracted_bunds": bunds_fc,
         "extracted_vegetation": vegetation_fc,
-        "extracted_trees": trees_fc,
+        "extracted_forest": forest_fc,
         "extracted_farms": farms_fc,
         "extracted_barren": barren_fc,
         "buildings": "buildings.geojson",
-        "trees": "trees.geojson",
+        "forest": "forest.geojson",
         "farms": "farms.geojson",
         "barren_land": "barren_land.geojson",
         "vegetation": "vegetation.geojson",
@@ -367,9 +366,9 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
 
     (session_dir / "metrics.json").write_text(json.dumps({
         "method": "drone_cadastral_ai",
-        "note": "Extracted via AI Drone Cadastral Feature Engine: Physical Boundary Walls, Access Road Corridors, Agricultural Bunds, Trees, Farms, and Barren Land Identification. Parcels conform to SVAMITVA / ULPIN standards.",
+        "note": "Extracted via AI Drone Cadastral Feature Engine: Physical Boundary Walls, Access Road Corridors, Agricultural Bunds, Forest Zones, Farms, and Barren Land Identification. Parcels conform to SVAMITVA / ULPIN standards.",
         "buildings_detected": len(bldgs),
-        "trees_detected": len(trees_fc["features"]),
+        "forest_zones_detected": len(forest_fc["features"]),
         "farms_detected": len(farms_fc["features"]),
         "barren_plots_detected": len(barren_fc["features"]),
         "parcels_delineated": len(parcels_list),
@@ -382,7 +381,7 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         "gsd_cm_px": round(meters_per_px * 100.0, 2),
     }), encoding="utf-8")
 
-    print(f"[upload] Completed session {session_id} in {time.time() - t0:.2f}s: {len(parcels_list)} parcels, {len(bldgs)} buildings, {len(trees_fc['features'])} trees, {len(farms_fc['features'])} farms, {len(barren_fc['features'])} barren plots")
+    print(f"[upload] Completed session {session_id} in {time.time() - t0:.2f}s: {len(parcels_list)} parcels, {len(bldgs)} buildings, {len(forest_fc['features'])} forest zones, {len(farms_fc['features'])} farms, {len(barren_fc['features'])} barren plots")
 
     return {
         "session_id": session_id,
@@ -392,3 +391,4 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         "roads": len(roads_px),
         "gsd_cm_px": round(meters_per_px * 100.0, 2),
     }
+
