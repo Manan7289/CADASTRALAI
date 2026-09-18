@@ -36,11 +36,13 @@ function iconSvg(shape, sev, size){
   return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'"><path d="'+shapePath(shape,cx,cy,r)+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round"/></svg>';
 }
 
-// If the page was opened as ?session=<id> (from the Upload page), fetch that
-// upload's own generated data instead of the fixed demo bundle under data/.
 function dataUrl(name){
   var params = new URLSearchParams(location.search);
   var session = params.get('session');
+  // model.html displays ML benchmark training runs (Inria & UAVid) which reside in /data/
+  if(window.location.pathname.endsWith('model.html')){
+    return '/data/' + name;
+  }
   if(!session && !params.has('legacy')){
     session = 'clear_drone_survey';
   }

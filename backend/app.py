@@ -143,7 +143,7 @@ LIVE_METRICS = {"inria_metrics.json", "uavid_metrics.json"}
 MODELS_DIR = BASE_DIR / "data" / "models"
 
 
-@app.route("/data/<name>")
+@app.route("/data/<path:name>")
 def serve_data(name):
     if name in LIVE_METRICS and (MODELS_DIR / name).exists():
         return send_from_directory(MODELS_DIR, name)
