@@ -13,10 +13,12 @@ import pickle, numpy as np, cv2
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
-MODEL_DIR   = Path(__file__).parent / "model_cache"
-MODEL_PATH  = MODEL_DIR / "road_clf.pkl"
-TRAIN_IMGS  = Path(__file__).parent.parent.parent / "data" / "datasets" / "inria_raw" / "data" / "train" / "images"
-TRAIN_GTS   = Path(__file__).parent.parent.parent / "data" / "datasets" / "inria_raw" / "data" / "train" / "gt"
+D_MODEL_PATH = Path("D:/cadastraai_data/models/model_cache/road_clf.pkl")
+LOCAL_MODEL_PATH = Path(__file__).parent / "model_cache" / "road_clf.pkl"
+MODEL_PATH = D_MODEL_PATH if D_MODEL_PATH.exists() else LOCAL_MODEL_PATH
+MODEL_DIR  = MODEL_PATH.parent
+TRAIN_IMGS = Path(__file__).parent.parent.parent / "data" / "datasets" / "inria_raw" / "data" / "train" / "images"
+TRAIN_GTS  = Path(__file__).parent.parent.parent / "data" / "datasets" / "inria_raw" / "data" / "train" / "gt"
 
 
 def _pixel_features(img_bgr):
@@ -81,7 +83,7 @@ def train(n_tiles=5, tile_size=500, px_per_class=2500, force=False):
         for _ in range(n_tiles):
             ry = np.random.randint(0, max(1, H-tile_size))
             rx = np.random.randint(0, max(1, W-tile_size))
-            F  = feats[ry:ry+tile_size, rx:rx+tile_size].reshape(-1,9)
+            F  = feats[ry:ry+tile_size, rx:rx+tile_size].reshape(-1,13)
             L  = labels[ry:ry+tile_size, rx:rx+tile_size].ravel()
             n = min(px_per_class, *(np.bincount(L.astype(np.uint8), minlength=3)))
             if n < 5: continue

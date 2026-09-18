@@ -17,7 +17,6 @@ import numpy as np
 from PIL import Image
 from shapely.geometry import Polygon, MultiPolygon, Point, LineString, box, mapping
 from shapely.ops import unary_union
-from scipy.spatial import Voronoi
 
 backend_dir = Path(r"c:\Users\gargm\Desktop\hackathon\cadastraai\backend")
 sys.path.insert(0, str(backend_dir))
@@ -74,22 +73,16 @@ print("=" * 60)
 from road_detector import detect_roads
 road_mask, freeway_poly, street_segs = detect_roads(img_bgr, gt_mask=crop_gt)
 
-# Convert ML road mask to polygon corridors for parcel boundary clipping
-contours_road, _ = cv2.findContours(road_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-road_polys = []
-for c in contours_road:
-    if cv2.contourArea(c) > 100:
-        eps = 0.015 * cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
-        if len(approx) >= 3:
-            p = Polygon(approx)
-            if p.is_valid:
-                road_polys.append(p)
+# Construct realistic road right-of-way corridors from detected street centerlines & freeway
+street_lines = []
+for ang, ((x1, y1), (x2, y2)) in street_segs:
+    street_lines.append(LineString([(x1, y1), (x2, y2)]).buffer(8))  # ~5m road width
 
-road_union = unary_union(road_polys) if road_polys else Polygon()
-roi_box    = box(0, 0, W, H)
+road_corridors = unary_union(street_lines + ([freeway_poly] if freeway_poly.area > 500 else []))
+roi_box = box(0, 0, W, H)
 
-print(f"  ML Road Detector: Extracted {len(road_polys)} ML road polygon corridors and {len(street_segs)} street segments")
+print(f"  ML Road Detector: Extracted {len(street_segs)} street segments and freeway ({freeway_poly.area:.0f} px2)")
+print(f"  Road Right-of-Way: {road_corridors.area:.0f} px2 ({road_corridors.area/(W*H)*100:.1f}% of AOI)")
 
 # ── 4. Extract building contours ─────────────────────────────────────────────
 print("\n" + "=" * 60)
@@ -153,40 +146,57 @@ print("\n" + "=" * 60)
 print("STEP 3: Full-Block Contiguous Cadastral Partition (Zero Gaps)")
 print("=" * 60)
 
-bldg_pts = np.array([[b["cx"], b["cy"]] for b in bldgs])
-margin = 3000
-outer_pts = np.array([
-    [-margin, -margin], [-margin, H+margin], [W+margin, -margin], [W+margin, H+margin],
-    [-margin, H/2], [W+margin, H/2], [W/2, -margin], [W/2, H+margin]
-])
-all_pts = np.vstack([bldg_pts, outer_pts])
-vor = Voronoi(all_pts)
+from shapely.ops import voronoi_diagram as shapely_voronoi
+from shapely.geometry import MultiPoint
 
-for i, b in enumerate(bldgs):
-    r_idx = vor.point_region[i]
-    reg = vor.regions[r_idx]
-    if not reg or -1 in reg: continue
-    pts = [vor.vertices[v] for v in reg]
-    if len(pts) < 3: continue
-    v_poly = Polygon(pts)
-    if not v_poly.is_valid: v_poly = v_poly.buffer(0)
-    
-    # Clip to ROI box and subtract road corridors
-    clipped = v_poly.intersection(roi_box)
-    if not road_union.is_empty:
-        clipped = clipped.difference(road_union)
-    if clipped.is_empty: continue
+bldg_seeds = MultiPoint([Point(b["cx"], b["cy"]) for b in bldgs])
+
+# Use shapely voronoi_diagram — guaranteed closed finite polygons for ALL seeds,
+# unlike scipy Voronoi which drops edge-adjacent buildings with open (-1) regions.
+roi_expanded = roi_box.buffer(10)
+vor_cells    = shapely_voronoi(bldg_seeds, envelope=roi_expanded)
+
+# Match each Voronoi cell to its seed building by containment / nearest distance
+unmatched_bldgs = list(bldgs)
+cell_list = list(vor_cells.geoms)
+
+for b in bldgs:
+    pt = Point(b["cx"], b["cy"])
+    best_cell = None
+    best_dist = float("inf")
+    for cell in cell_list:
+        if cell.contains(pt):
+            best_cell = cell
+            best_dist = 0.0
+            break
+        d = cell.distance(pt)
+        if d < best_dist:
+            best_dist = d
+            best_cell = cell
+
+    if best_cell is None:
+        continue
+
+    # Clip to image bounds and subtract road corridors
+    clipped = best_cell.intersection(roi_box)
+    if not road_corridors.is_empty:
+        diff = clipped.difference(road_corridors)
+        if not diff.is_empty and diff.area >= 100:
+            clipped = diff
+    if clipped.is_empty:
+        continue
     if isinstance(clipped, MultiPolygon):
-        pt_b = Point(b["cx"], b["cy"])
+        pt_b    = Point(b["cx"], b["cy"])
         matched = [p for p in clipped.geoms if p.contains(pt_b)]
         clipped = matched[0] if matched else max(clipped.geoms, key=lambda p: p.area)
 
-    # Simplify to clean straight survey lines (~1m tolerance)
+    # Simplify to clean survey-grade boundary lines (~1m tolerance at 0.3m/px)
     simplified = clipped.simplify(3.5, preserve_topology=True)
     if not simplified.is_valid or simplified.area < 100:
         simplified = clipped
-        
+
     b["parcel_poly_px"] = simplified
+
 
 # ── 6. Build GeoJSON Parcels & Property Cards ────────────────────────────────
 parcels_list   = []
