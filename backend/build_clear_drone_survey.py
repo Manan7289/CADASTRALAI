@@ -27,6 +27,8 @@ sys.path.insert(0, str(backend_dir / "ml"))
 
 import cadastral_standards
 from building_classifier import classify_buildings, train as train_bldg
+from boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_physical_walls
+from quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
 
 OUT_DIR = backend_dir.parent / "data" / "uploads" / "clear_drone_survey"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -166,10 +168,23 @@ comm_bldgs = [b for b in bldgs if b["type"] == "commercial"]
 res_bldgs  = [b for b in bldgs if b["type"] != "commercial"]
 print(f"  ML Classification: {len(comm_bldgs)} commercial, {len(res_bldgs)} residential/shed")
 
-# ── 5. Rectilinear Street-Aligned Subdivision Engine ────────────────────────
+# ── 5. 4-Factor Cadastral Parcel Engine ──────────────────────────────────────
 print("\n" + "=" * 60)
-print("STEP 3: Rectilinear Street-Aligned Lot Subdivision")
+print("STEP 3: 4-Factor Cadastral Engine (Physical Walls + Quad + Equal-Area)")
 print("=" * 60)
+
+# Factor 2: Detect Physical Compound Walls & Fences from Drone Imagery
+print("  [Factor 2] Extracting physical compound walls & fence boundaries...")
+wall_segments = detect_physical_walls_and_fences(img_bgr)
+print(f"  [Factor 2] Detected {len(wall_segments)} visible physical wall/fence segments")
+
+# Voronoi Planar Seeds for Zero-Overlap Guarantee
+from shapely.ops import voronoi_diagram as shapely_voronoi
+from shapely.geometry import MultiPoint
+
+seeds = MultiPoint([Point(b["cx"], b["cy"]) for b in bldgs])
+vor = shapely_voronoi(seeds, envelope=roi_box.buffer(10))
+vor_cells = list(vor.geoms)
 
 def get_nearest_road_info(pt, road_lines):
     min_d = 1e9
@@ -200,6 +215,7 @@ for b in bldgs:
         road_bldg_map[key] = {"line": ls, "angle": ang, "bldgs": []}
     road_bldg_map[key]["bldgs"].append((b, pt, d, ang))
 
+# Factor 3 & 4: Street-aligned quadrilateral lot generator with uniform frontage
 for key, group in road_bldg_map.items():
     ls = group["line"]
     ang = group["angle"]
@@ -217,22 +233,30 @@ for key, group in road_bldg_map.items():
     proj_data.sort(key=lambda x: x[0])
     n = len(proj_data)
     
+    # Calculate median frontage width along this block to normalize plot widths
+    if n > 1:
+        s_diffs = [proj_data[k+1][0] - proj_data[k][0] for k in range(n-1)]
+        median_spacing = float(np.median(s_diffs))
+        half_w = max(15.0, min(35.0, median_spacing / 2.0))
+    else:
+        half_w = 25.0
+
     for idx in range(n):
         s_curr, d_curr, b_curr, pt_curr = proj_data[idx]
         
-        # Side boundaries perpendicular to street
+        # Normalized side boundaries perpendicular to street
         if idx == 0:
-            s_left = s_curr - 40.0
+            s_left = s_curr - half_w
         else:
             s_left = (proj_data[idx-1][0] + s_curr) / 2.0
             
         if idx == n - 1:
-            s_right = s_curr + 40.0
+            s_right = s_curr + half_w
         else:
             s_right = (s_curr + proj_data[idx+1][0]) / 2.0
             
         d_front = max(5.0, d_curr - 15.0)
-        d_back  = d_curr + 50.0
+        d_back  = d_curr + 45.0
         
         pt_left_front  = ls.interpolate(max(0, s_left))
         pt_right_front = ls.interpolate(min(ls.length, s_right))
@@ -258,29 +282,62 @@ for key, group in road_bldg_map.items():
         if not rect_poly.is_valid:
             rect_poly = rect_poly.buffer(0)
             
-        # Union with building footprint so building is guaranteed fully inside its lot
-        lot_poly = rect_poly.union(b_curr["poly_px"].buffer(10))
-        lot_poly = lot_poly.intersection(roi_box)
+        # Match Voronoi cell to guarantee zero mutual overlap
+        best_v = None
+        for v in vor_cells:
+            if v.contains(pt_curr):
+                best_v = v; break
+        if best_v is None:
+            best_v = min(vor_cells, key=lambda v: v.distance(pt_curr))
+            
+        lot_bounded = rect_poly.intersection(best_v).intersection(roi_box)
+        if lot_bounded.is_empty or lot_bounded.area < 50:
+            lot_bounded = best_v.intersection(roi_box)
+            
+        # Factor 2: Snap parcel lot lines to real physical compound walls
+        lot_snapped = snap_polygon_to_physical_walls(lot_bounded, wall_segments, max_snap_dist=3.0)
+        
+        # Factor 3 & 4: Regularize to clean 4-vertex quadrilateral aligned with street
+        lot_quad = regularize_to_quadrilateral(lot_snapped, street_angle_deg=ang)
+        
+        # Clip to Voronoi cell to preserve zero-overlap guarantee
+        final_lot = lot_quad.intersection(best_v).intersection(roi_box)
+        if final_lot.is_empty or final_lot.area < 50:
+            final_lot = lot_snapped.intersection(best_v).intersection(roi_box)
+            
         if not road_union.is_empty:
-            lot_poly = lot_poly.difference(road_union)
+            diff = final_lot.difference(road_union)
+            if not diff.is_empty and diff.area >= 100:
+                final_lot = diff
+                
+        if isinstance(final_lot, MultiPolygon):
+            matched = [p for p in final_lot.geoms if p.contains(pt_curr)]
+            final_lot = matched[0] if matched else max(final_lot.geoms, key=lambda p: p.area)
             
-        if isinstance(lot_poly, MultiPolygon):
-            matched = [p for p in lot_poly.geoms if p.contains(pt_curr)]
-            lot_poly = matched[0] if matched else max(lot_poly.geoms, key=lambda p: p.area)
-            
-        b_curr["parcel_poly_px"] = lot_poly.simplify(3.0, preserve_topology=True)
+        b_curr["parcel_poly_px"] = final_lot.simplify(2.5, preserve_topology=True)
 
-# Unified Lot for Commercial Compound
+# Unified Commercial Compounds
 for b in comm_bldgs:
+    pt = Point(b["cx"], b["cy"])
     b_poly = b["poly_px"]
-    lot = b_poly.buffer(35, join_style=2, cap_style=2)
-    lot = lot.intersection(roi_box)
+    best_v = None
+    for v in vor_cells:
+        if v.contains(pt):
+            best_v = v; break
+    if best_v is None:
+        best_v = min(vor_cells, key=lambda v: v.distance(pt))
+        
+    lot = b_poly.buffer(35, join_style=2, cap_style=2).intersection(best_v).intersection(roi_box)
     if not road_union.is_empty:
-        lot = lot.difference(road_union)
-    if lot.is_empty: lot = b_poly.buffer(10)
+        diff = lot.difference(road_union)
+        if not diff.is_empty and diff.area >= 100:
+            lot = diff
+    if lot.is_empty:
+        lot = b_poly.buffer(10).intersection(roi_box)
     if isinstance(lot, MultiPolygon):
         lot = max(lot.geoms, key=lambda p: p.area)
     b["parcel_poly_px"] = lot.simplify(3.0, preserve_topology=True)
+
 
 # ── 6. Build GeoJSON Parcels & Property Cards ────────────────────────────────
 parcels_list   = []

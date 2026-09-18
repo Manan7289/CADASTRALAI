@@ -1,0 +1,35 @@
+{
+  "created": "2026-09-18T01:30:34.557806",
+  "python_version": "3.12.10",
+  "platform": "Windows x64 (AMD64)",
+  "sklearn_version": "1.7.2",
+  "models": {
+    "road_clf.pkl": {
+      "type": "sklearn.ensemble.RandomForestClassifier",
+      "n_estimators": 100,
+      "max_depth": 14,
+      "features": "L,a,b,H,S,V,local_mean,local_std,local_range (9-dim per pixel)",
+      "classes": {
+        "0": "building",
+        "1": "road",
+        "2": "vegetation/other"
+      },
+      "training": "40 Inria aerial images, 784989 pixels sampled",
+      "size_mb": 79.7
+    },
+    "bldg_clf.pkl": {
+      "type": "sklearn.pipeline.Pipeline (StandardScaler + KMeans)",
+      "n_clusters": 3,
+      "features": "log_area, aspect_ratio, compactness, solidity, extent, log_perimeter",
+      "classes": {
+        "0": "shed",
+        "1": "residential",
+        "2": "commercial"
+      },
+      "training": "40 Inria GT masks, 48392 building contours",
+      "size_mb": 0.195
+    }
+  },
+  "install": "pip install -r requirements.txt",
+  "usage": "python build_clear_drone_survey.py"
+}
