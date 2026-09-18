@@ -21,6 +21,13 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
+import sys
+_backend_dir = Path(__file__).resolve().parent
+if str(_backend_dir) not in sys.path:
+    sys.path.insert(0, str(_backend_dir))
+if str(_backend_dir / "ml") not in sys.path:
+    sys.path.insert(0, str(_backend_dir / "ml"))
+
 import drone_utils
 import upload_pipeline
 

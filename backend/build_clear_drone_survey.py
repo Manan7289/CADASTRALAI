@@ -21,7 +21,8 @@ from PIL import Image
 from shapely.geometry import Polygon, MultiPolygon, Point, LineString, box, mapping
 from shapely.ops import unary_union
 
-backend_dir = Path(r"c:\Users\gargm\Desktop\hackathon\cadastraai\backend")
+backend_dir = Path(__file__).resolve().parent
+BASE_DIR = backend_dir.parent
 sys.path.insert(0, str(backend_dir))
 sys.path.insert(0, str(backend_dir / "ml"))
 
@@ -31,19 +32,21 @@ from boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_
 from quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
 from parcel_engine import generate_4factor_cadastral_parcels
 
-OUT_DIR = backend_dir.parent / "data" / "uploads" / "clear_drone_survey"
+OUT_DIR = BASE_DIR / "data" / "uploads" / "clear_drone_survey"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── 1. Load orthomosaic + GT mask ────────────────────────────────────────────
-src_img_path = backend_dir.parent / "data" / "processed" / "austin_sample.jpg"
+src_img_path = BASE_DIR / "data" / "processed" / "austin_sample.jpg"
 img_pil = Image.open(src_img_path)
 img_pil.save(OUT_DIR / "image.png")
 img_bgr = cv2.imread(str(src_img_path))
 H, W = img_bgr.shape[:2]  # 2000 x 2000
 
-gt_path  = backend_dir.parent / "data" / "datasets" / "inria_raw" / "data" / "train" / "gt" / "austin1.tif"
-gt_raw   = cv2.imread(str(gt_path), cv2.IMREAD_GRAYSCALE)
-crop_gt  = gt_raw[500:2500, 500:2500]
+gt_path  = BASE_DIR / "data" / "datasets" / "inria_raw" / "data" / "train" / "gt" / "austin1.tif"
+if not gt_path.exists():
+    gt_path = Path("D:/cadastraai_data/inria_raw/data/train/gt/austin1.tif")
+gt_raw   = cv2.imread(str(gt_path), cv2.IMREAD_GRAYSCALE) if gt_path.exists() else None
+crop_gt  = gt_raw[500:2500, 500:2500] if gt_raw is not None else None
 
 # ── 2. WGS84 georef — Austin TX ───────────────────────────────────────────────
 CROP_UL_LAT =  30.229612
@@ -76,7 +79,9 @@ print("=" * 60)
 print("STEP 1: Parse Road Network & Land Sectors")
 print("=" * 60)
 
-osm_path = Path("D:/cadastraai_data/raw_parcels/osm_bbox.json")
+osm_path = BASE_DIR / "data" / "raw" / "osm_bbox.json"
+if not osm_path.exists():
+    osm_path = Path("D:/cadastraai_data/raw_parcels/osm_bbox.json")
 osm_data = json.loads(osm_path.read_text(encoding="utf-8"))
 elements = osm_data.get("elements", [])
 nodes = {e["id"]: (e["lat"], e["lon"]) for e in elements if e["type"] == "node" and "lat" in e}

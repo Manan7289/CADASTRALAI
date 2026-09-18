@@ -22,12 +22,17 @@ import json
 import math
 import time
 from pathlib import Path
+import sys
 from typing import Dict, List, Tuple
+
+_ml_dir = Path(__file__).resolve().parent / "ml"
+if str(_ml_dir) not in sys.path:
+    sys.path.insert(0, str(_ml_dir))
 
 import cv2
 import numpy as np
 from PIL import Image
-from shapely.geometry import Polygon, MultiPolygon, LineString, shape, mapping
+from shapely.geometry import Polygon, MultiPolygon, LineString, box, shape, mapping
 from shapely.ops import unary_union
 
 import cadastral_standards
@@ -35,7 +40,7 @@ import drone_utils
 import fetch_data
 import model
 import rules
-from ml import drone_cadastre
+from ml import drone_cadastre, parcel_engine
 
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 MAX_DIM = 1024  # High-res processing grid for crisp boundary detection
@@ -119,15 +124,12 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
     # 1. AI Drone Cadastral Feature Extraction
     features = drone_cadastre.extract_drone_features(arr, meters_per_px)
     bldg_polys_px = features["buildings_px"]
-    parcel_polys_px = features["parcels_px"]
     roads_px = features["roads_px"]
     walls_px = features["walls_px"]
 
-    detected_bldg_polys = drone_cadastre.pixel_polygons_to_geospatial(bldg_polys_px, px_to_lonlat)
-    detected_parcel_polys = drone_cadastre.pixel_polygons_to_geospatial(parcel_polys_px, px_to_lonlat)
-
     # 2. Extract Road & Boundary Wall Vector Layers
     roads_fc = {"type": "FeatureCollection", "features": []}
+    road_lines = []
     for i, r_pts in enumerate(roads_px):
         coords = [px_to_lonlat(float(px), float(py)) for px, py in r_pts]
         if len(coords) >= 2:
@@ -136,6 +138,7 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
                 "properties": {"id": i, "type": "road_corridor"},
                 "geometry": {"type": "LineString", "coordinates": coords},
             })
+            road_lines.append((LineString(r_pts), max(10.0, 6.0 / meters_per_px)))
 
     walls_fc = {"type": "FeatureCollection", "features": []}
     for i, w_pts in enumerate(walls_px):
@@ -166,106 +169,78 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
     osm_polys = [shape(f["geometry"]) for f in live_ref["buildings"]["features"] if f["geometry"]["type"] == "Polygon"]
     osm_union = unary_union(osm_polys) if osm_polys else Polygon()
 
-    # 4. Process Delineated Parcels & Assign Buildings
-    deg2_to_m2 = 111320.0 * (111320.0 * math.cos(math.radians(center_lat)))
-    deg_to_m = 111320.0
+    # Incorporate OSM roads into road_lines for parcel frontage alignment
+    for f in live_ref["roads"]["features"]:
+        geom = shape(f["geometry"])
+        if geom.geom_type == "LineString":
+            px_coords = [lonlat_to_px(c[0], c[1]) for c in geom.coords]
+            if len(px_coords) >= 2:
+                road_lines.append((LineString(px_coords), max(12.0, 8.0 / meters_per_px)))
+        elif geom.geom_type == "MultiLineString":
+            for line in geom.geoms:
+                px_coords = [lonlat_to_px(c[0], c[1]) for c in line.coords]
+                if len(px_coords) >= 2:
+                    road_lines.append((LineString(px_coords), max(12.0, 8.0 / meters_per_px)))
 
-    buildings_fc = {"type": "FeatureCollection", "features": []}
-    bldg_entries = []
-    for bid, b_poly in enumerate(detected_bldg_polys):
-        inter = b_poly.intersection(osm_union).area if not osm_union.is_empty else 0.0
-        unrecorded = (inter / b_poly.area if b_poly.area > 0 else 1.0) < UNRECORDED_IOU_THRESH
-        area_m2 = round(b_poly.area * deg2_to_m2, 1)
-        b_feat = {
-            "type": "Feature",
-            "properties": {
-                "id": bid,
-                "area_m2": area_m2,
-                "unrecorded": bool(unrecorded),
-                "parcel_ulpin": "",
-            },
-            "geometry": mapping(b_poly),
-        }
-        buildings_fc["features"].append(b_feat)
-        bldg_entries.append({"id": bid, "geom": b_poly, "area_m2": area_m2, "unrecorded": unrecorded})
+    road_union_px = unary_union([ls.buffer(w / 2.0) for ls, w in road_lines]) if road_lines else Polygon()
 
-    # Delineate parcels and compute cadastral attributes
-    parcels_list = []
-    property_cards = {}
-    reports = {}
+    # 4. Prepare building objects for 4-Factor Regularized Cadastral Engine
+    bldgs = []
+    for bid, pts in enumerate(bldg_polys_px):
+        if len(pts) < 3:
+            continue
+        p_px = Polygon(pts)
+        if not p_px.is_valid:
+            p_px = p_px.buffer(0)
+        if p_px.is_empty or p_px.area < 10:
+            continue
 
-    road_shapes = [shape(f["geometry"]) for f in live_ref["roads"]["features"] if f["geometry"]["type"] in ("LineString", "MultiLineString")]
-    road_shapes.extend([shape(f["geometry"]) for f in roads_fc["features"]])
-    road_union = unary_union(road_shapes) if road_shapes else None
+        geo_coords = [px_to_lonlat(float(x), float(y)) for x, y in p_px.exterior.coords]
+        p_geo = Polygon(geo_coords)
+        if not p_geo.is_valid:
+            p_geo = p_geo.buffer(0)
+        if p_geo.is_empty:
+            continue
 
-    for pid, p_poly in enumerate(detected_parcel_polys):
-        centroid = p_poly.centroid
-        ulpin = cadastral_standards.generate_ulpin(centroid.y, centroid.x, pid)
-        traverse = cadastral_standards.extract_traverse_points(p_poly)
+        inter = p_geo.intersection(osm_union).area if not osm_union.is_empty else 0.0
+        unrecorded = (inter / p_geo.area if p_geo.area > 0 else 1.0) < UNRECORDED_IOU_THRESH
+        centroid = p_px.centroid
+        area_px = p_px.area
 
-        # Buildings inside this parcel
-        contained_bldgs = []
-        for b in bldg_entries:
-            if p_poly.contains(b["geom"].centroid) or p_poly.intersection(b["geom"]).area > (0.3 * b["geom"].area):
-                contained_bldgs.append(b)
-                # Link building back to parcel
-                buildings_fc["features"][b["id"]]["properties"]["parcel_ulpin"] = ulpin
-
-        has_buildings = len(contained_bldgs) > 0
-        landuse = "Residential / Built-up" if has_buildings else "Vacant Plot / Open Land"
-
-        # Road connectivity
-        road_dist_m = round(p_poly.distance(road_union) * deg_to_m, 1) if road_union is not None else 0.0
-        road_connected = (road_dist_m <= 15.0)
-
-        # Cadastral metrics
-        p_area_m2 = round(p_poly.area * deg2_to_m2, 1)
-        p_perim_m = round(p_poly.length * deg_to_m, 1)
-        bldg_area_sum = round(sum(b["area_m2"] for b in contained_bldgs), 1)
-        open_area = max(0.0, round(p_area_m2 - bldg_area_sum, 1))
-        gcr_pct = round((bldg_area_sum / p_area_m2) * 100.0, 1) if p_area_m2 > 0 else 0.0
-
-        parcel_props = {
-            "id": pid,
-            "ulpin": ulpin,
-            "area_m2": p_area_m2,
-            "area_sq_ft": round(p_area_m2 * 10.7639, 1),
-            "area_guntha": round(p_area_m2 / 101.17, 3),
-            "perimeter_m": p_perim_m,
-            "landuse": landuse,
-            "building_count": len(contained_bldgs),
-            "building_ids": [b["id"] for b in contained_bldgs],
-            "built_up_area_m2": bldg_area_sum,
-            "open_space_m2": open_area,
-            "ground_coverage_ratio_pct": gcr_pct,
-            "road_connected": bool(road_connected),
-            "road_distance_m": road_dist_m,
-            "gps_lat": round(centroid.y, 6),
-            "gps_lon": round(centroid.x, 6),
-            "traverse_points": traverse,
-            "has_unrecorded_building": any(b["unrecorded"] for b in contained_bldgs),
-            "alerts": [],
-        }
-        parcels_list.append({
-            "type": "Feature",
-            "properties": parcel_props,
-            "geometry": mapping(p_poly),
+        bldgs.append({
+            "id": bid,
+            "cx": centroid.x,
+            "cy": centroid.y,
+            "poly_px": p_px,
+            "poly_geo": p_geo,
+            "area_px": area_px,
+            "unrecorded": unrecorded,
+            "type": "residential" if area_px < (350.0 / (meters_per_px ** 2)) else "commercial",
         })
 
-        # Generate SVAMITVA Property Card HTML
-        b_geoms = [b["geom"] for b in contained_bldgs]
-        card_html = cadastral_standards.generate_cadastral_property_card(
-            parcel_props, p_poly, b_geoms, aoi_name=f"UAV Drone Survey ({center_lat:.4f}N, {center_lon:.4f}E)"
-        )
-        property_cards[str(pid)] = card_html
+    # 5. Execute 4-Factor Cadastral Parcel Engine (Physical Walls, Rectangularization, 0-Overlap)
+    img_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+    roi_box = box(0, 0, proc_w, proc_h)
+    parcels_list, bldg_features, property_cards = parcel_engine.generate_4factor_cadastral_parcels(
+        bldgs=bldgs,
+        road_lines=road_lines,
+        img_bgr=img_bgr,
+        roi_box=roi_box,
+        px_to_lonlat_fn=px_to_lonlat,
+        cadastral_standards=cadastral_standards,
+        road_union=road_union_px,
+        meters_per_px=meters_per_px,
+    )
+
+    buildings_fc = {"type": "FeatureCollection", "features": bldg_features}
+    parcels_fc = {"type": "FeatureCollection", "features": parcels_list}
 
     # Structure compliance reports
+    reports = {}
     for f in buildings_fc["features"]:
         bid = f["properties"]["id"]
         area_val = f["properties"]["area_m2"]
-        reports[str(bid)] = build_field_report(bid, area_val, [], f["properties"]["parcel_ulpin"])
-
-    parcels_fc = {"type": "FeatureCollection", "features": parcels_list}
+        reports[str(bid)] = build_field_report(bid, area_val, [], f["properties"].get("parcel_ulpin", ""))
 
     # 5. Export CAD / DXF format for surveyors
     dxf_path = session_dir / "cadastre.dxf"
@@ -306,7 +281,7 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
     (session_dir / "metrics.json").write_text(json.dumps({
         "method": "drone_cadastral_ai",
         "note": "Extracted via AI Drone Cadastral Feature Engine: Physical Boundary Walls, Access Road Corridors, and Planar Watershed Partitioning. Parcels conform to SVAMITVA / ULPIN standards.",
-        "buildings_detected": len(detected_bldg_polys),
+        "buildings_detected": len(bldgs),
         "parcels_delineated": len(parcels_list),
         "boundary_walls_detected": len(walls_px),
         "roads_detected": len(roads_px),
@@ -314,11 +289,11 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         "gsd_cm_px": round(meters_per_px * 100.0, 2),
     }), encoding="utf-8")
 
-    print(f"[upload] Completed session {session_id} in {time.time() - t0:.2f}s: {len(parcels_list)} parcels, {len(detected_bldg_polys)} buildings, {len(walls_px)} walls")
+    print(f"[upload] Completed session {session_id} in {time.time() - t0:.2f}s: {len(parcels_list)} parcels, {len(bldgs)} buildings, {len(walls_px)} walls")
 
     return {
         "session_id": session_id,
-        "buildings_detected": len(detected_bldg_polys),
+        "buildings_detected": len(bldgs),
         "parcels": len(parcels_list),
         "boundary_walls": len(walls_px),
         "roads": len(roads_px),

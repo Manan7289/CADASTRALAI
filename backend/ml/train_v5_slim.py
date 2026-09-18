@@ -19,7 +19,10 @@ from sklearn.utils import shuffle as sk_shuffle
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
-D_MODEL_DIR = Path("D:/cadastraai_data/models/model_cache")
+DEFAULT_DATA_DIR = Path("D:/cadastraai_data") if Path("D:/cadastraai_data").exists() else BACKEND_DIR.parent / "data"
+DATA_DIR = Path(os.environ.get("CADASTRAAI_DATA_DIR", str(DEFAULT_DATA_DIR)))
+
+D_MODEL_DIR = DATA_DIR / "models" / "model_cache"
 D_MODEL_DIR.mkdir(parents=True, exist_ok=True)
 D_MODEL_PATH = D_MODEL_DIR / "road_clf.pkl"
 
@@ -97,9 +100,9 @@ for ip in inria_paths:
 print(f"  Inria pixels: {sum(len(x) for x in ALL_X):,}")
 
 # ── 2. AI4Boundaries NL ──────────────────────────────────────────────────────
-AI4B_IMG  = Path("D:/cadastraai_data/new_datasets/ai4boundaries/images")
-AI4B_MASK = Path("D:/cadastraai_data/new_datasets/ai4boundaries/masks")
-ai4b_imgs = sorted(AI4B_IMG.glob("*_image.tif"))
+AI4B_IMG  = DATA_DIR / "new_datasets" / "ai4boundaries" / "images"
+AI4B_MASK = DATA_DIR / "new_datasets" / "ai4boundaries" / "masks"
+ai4b_imgs = sorted(AI4B_IMG.glob("*_image.tif")) if AI4B_IMG.exists() else []
 print(f"\n[2/4] AI4Boundaries NL: {len(ai4b_imgs)} chips ...")
 
 ai4b_added = 0
@@ -132,8 +135,8 @@ for ip in ai4b_imgs:
 print(f"  AI4Boundaries pixels: {ai4b_added:,}")
 
 # ── 3. Semantic Drone Dataset ─────────────────────────────────────────────────
-SDD_BASE  = Path("D:/cadastraai_data/new_datasets/semantic_drone/dataset/semantic_drone_dataset")
-sdd_imgs  = sorted((SDD_BASE / "original_images").glob("*.jpg"))
+SDD_BASE  = DATA_DIR / "new_datasets" / "semantic_drone" / "dataset" / "semantic_drone_dataset"
+sdd_imgs  = sorted((SDD_BASE / "original_images").glob("*.jpg")) if SDD_BASE.exists() else []
 print(f"\n[3/4] Semantic Drone Dataset: {len(sdd_imgs)} UAV images ...")
 
 sdd_added = 0
@@ -166,7 +169,7 @@ for ip in sdd_imgs:
 print(f"  Semantic Drone pixels: {sdd_added:,}")
 
 # ── 4. Vijayawada ────────────────────────────────────────────────────────────
-VJ = Path("D:/cadastraai_data/custom_datasets/datasets/vijayawada/aoi_singhnagar_10cm.tif")
+VJ = DATA_DIR / "custom_datasets" / "datasets" / "vijayawada" / "aoi_singhnagar_10cm.tif"
 if VJ.exists():
     print(f"\n[4/4] Vijayawada 10cm UAV ...")
     vj = cv2.imread(str(VJ))

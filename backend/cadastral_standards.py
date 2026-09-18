@@ -13,26 +13,56 @@ from typing import Dict, List, Tuple
 from shapely.geometry import Polygon, shape, mapping
 
 
+def compute_iso7064_mod11_2(data: str) -> str:
+    """Compute the ISO 7064 Mod 11-2 check character for numeric or alphanumeric input string."""
+    val = 0
+    for char in data:
+        if '0' <= char <= '9':
+            d = int(char)
+        elif 'A' <= char <= 'Z':
+            d = ord(char) - ord('A') + 10
+        elif 'a' <= char <= 'z':
+            d = ord(char) - ord('a') + 10
+        else:
+            d = 0
+        val = ((val + d) * 2) % 11
+    check = (11 - val) % 11
+    if check == 10:
+        return 'X'
+    return str(check)
+
+
+def validate_ulpin(ulpin: str) -> bool:
+    """Validate that a 14-character ULPIN has a valid ISO 7064 Mod 11-2 check character."""
+    if not ulpin or len(ulpin) != 14:
+        return False
+    body = ulpin[:-1]
+    expected = compute_iso7064_mod11_2(body)
+    return ulpin[-1].upper() == expected
+
+
 def generate_ulpin(lat: float, lon: float, parcel_seq: int = 0) -> str:
     """Generate a standard 14-character Unique Land Parcel Identification Number (ULPIN / Bhu-Aadhaar).
-    Encodes spatial coordinates (degrees, minutes, seconds) with a sequential plot checksum."""
+    Encodes spatial coordinates (degrees, minutes, seconds) with an ISO 7064 Mod 11-2 check character.
+    Format: 13-character geographic plot identifier + 1-character ISO 7064 check character = 14 chars.
+    """
     lat_abs = abs(lat)
     lon_abs = abs(lon)
 
-    lat_deg = int(lat_abs)
-    lat_min = int((lat_abs - lat_deg) * 60)
-    lat_sec = int((((lat_abs - lat_deg) * 60) - lat_min) * 600)  # tenths of sec
+    lat_deg = int(lat_abs) % 100
+    lat_min = int((lat_abs - int(lat_abs)) * 60)
+    lat_sec = int((((lat_abs - int(lat_abs)) * 60) - lat_min) * 60)
 
-    lon_deg = int(lon_abs)
-    lon_min = int((lon_abs - lon_deg) * 60)
-    lon_sec = int((((lon_abs - lon_deg) * 60) - lon_min) * 600)
+    lon_deg = int(lon_abs) % 100
+    lon_min = int((lon_abs - int(lon_abs)) * 60)
+    lon_sec = int((((lon_abs - int(lon_abs)) * 60) - lon_min) * 60)
 
-    # Base alphanumeric format: LLMMSSLLMMSS + 2 char check
-    core = f"{lat_deg:02d}{lat_min:02d}{lat_sec:03d}{lon_deg:02d}{lon_min:02d}{lon_sec:03d}"
-    h = hashlib.sha256(f"{core}-{parcel_seq}".encode()).hexdigest().upper()
-    check = h[:2]
-    # Format: 14 chars, e.g. 194145073333AB
-    return f"{core[:12]}{check}"
+    seq_digit = abs(parcel_seq) % 10
+
+    # 13 characters: lat_deg(2) + lat_min(2) + lat_sec(2) + lon_deg(2) + lon_min(2) + lon_sec(2) + seq_digit(1)
+    base = f"{lat_deg:02d}{lat_min:02d}{lat_sec:02d}{lon_deg:02d}{lon_min:02d}{lon_sec:02d}{seq_digit:01d}"
+    check_char = compute_iso7064_mod11_2(base)
+    return f"{base}{check_char}"
 
 
 def _ensure_polygon(geom):

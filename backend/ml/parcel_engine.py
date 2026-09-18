@@ -14,8 +14,16 @@ import numpy as np
 from shapely.geometry import Polygon, MultiPolygon, Point, LineString, MultiPoint, box, mapping
 from shapely.ops import unary_union, voronoi_diagram
 
-from boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_physical_walls
-from quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
+try:
+    from ml.boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_physical_walls
+    from ml.quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
+except ImportError:
+    try:
+        from .boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_physical_walls
+        from .quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
+    except ImportError:
+        from boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_physical_walls
+        from quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
 
 
 def dominant_angles_from_segs(street_segs, n_bins=36):
@@ -63,6 +71,7 @@ def generate_4factor_cadastral_parcels(
     px_to_lonlat_fn,
     cadastral_standards,
     road_union: Polygon = None,
+    meters_per_px: float = 0.3,
 ) -> Tuple[List[Dict], List[Dict], Dict[str, Any]]:
     """
     Generate clean, 4-factor regularized cadastral land parcels.
@@ -71,9 +80,15 @@ def generate_4factor_cadastral_parcels(
     -------
     parcels_geojson_features, bldg_features, property_cards
     """
+    if not bldgs:
+        return [], [], {}
+
     H, W = img_bgr.shape[:2]
     if road_union is None:
         road_union = Polygon()
+
+    m_per_px = float(meters_per_px) if meters_per_px > 0 else 0.3
+    m2_per_px2 = m_per_px ** 2
 
     # ── Factor 2: Detect Physical Compound Walls & Fences ────────────────────
     print("  [Factor 2] Extracting physical compound walls & fence boundaries...")
@@ -81,9 +96,12 @@ def generate_4factor_cadastral_parcels(
     print(f"  [Factor 2] Extracted {len(wall_segments)} visible physical boundary segments")
 
     # ── Planar Voronoi Seeds (Zero-Overlap Guarantee) ────────────────────────
-    seeds = MultiPoint([Point(b["cx"], b["cy"]) for b in bldgs])
-    vor = voronoi_diagram(seeds, envelope=roi_box.buffer(10))
-    vor_cells = list(vor.geoms)
+    if len(bldgs) >= 2:
+        seeds = MultiPoint([Point(b["cx"], b["cy"]) for b in bldgs])
+        vor = voronoi_diagram(seeds, envelope=roi_box.buffer(10))
+        vor_cells = list(vor.geoms)
+    else:
+        vor_cells = [roi_box]
 
     # ── Group residential buildings by nearest street for block alignment ────
     road_bldg_map = {}
@@ -261,6 +279,33 @@ def generate_4factor_cadastral_parcels(
             lot = max(lot.geoms, key=lambda p: p.area)
         b["parcel_poly_px"] = lot.simplify(3.0, preserve_topology=True)
 
+    # ── Fallback for any unassigned buildings (e.g. no nearby road segment) ──
+    for b in bldgs:
+        if "parcel_poly_px" not in b:
+            pt = Point(b["cx"], b["cy"])
+            b_poly = b["poly_px"]
+            best_v = None
+            for v in vor_cells:
+                if v.contains(pt):
+                    best_v = v
+                    break
+            if best_v is None and vor_cells:
+                best_v = min(vor_cells, key=lambda v: v.distance(pt))
+            mrr = b_poly.minimum_rotated_rectangle
+            setback_px = max(15.0, 5.0 / m_per_px)
+            lot = mrr.buffer(setback_px, join_style=2, cap_style=2)
+            if best_v is not None:
+                lot = lot.intersection(best_v)
+            lot = lot.intersection(roi_box)
+            if not road_union.is_empty:
+                diff = lot.difference(road_union)
+                if not diff.is_empty and diff.area >= 50:
+                    lot = diff
+            if isinstance(lot, MultiPolygon):
+                matched = [p for p in lot.geoms if p.contains(pt)]
+                lot = matched[0] if matched else max(lot.geoms, key=lambda p: p.area)
+            b["parcel_poly_px"] = lot.simplify(1.5, preserve_topology=True)
+
     # ── Factor 1: Generate GeoJSON, ULPINs, Property Cards ───────────────────
     parcels_list = []
     bldg_features = []
@@ -270,8 +315,8 @@ def generate_4factor_cadastral_parcels(
     for b in bldgs:
         bldg_features.append({
             "type": "Feature",
-            "properties": {"id": b["id"], "area_m2": round(b["area_px"] * 0.09, 1),
-                           "unrecorded": False, "parcel_ulpin": ""},
+            "properties": {"id": b["id"], "area_m2": round(b["area_px"] * m2_per_px2, 1),
+                           "unrecorded": bool(b.get("unrecorded", False)), "parcel_ulpin": ""},
             "geometry": mapping(b["poly_geo"]),
         })
 
@@ -297,7 +342,7 @@ def generate_4factor_cadastral_parcels(
             aoi_name = "Residential Cadastral Survey"
 
         for poly_px in polys:
-            if poly_px.is_empty or poly_px.area < 100:
+            if poly_px.is_empty or poly_px.area < 50:
                 continue
             geo_pts = [px_to_lonlat_fn(float(x), float(y)) for x, y in poly_px.exterior.coords]
             poly_geo = Polygon(geo_pts)
@@ -308,8 +353,8 @@ def generate_4factor_cadastral_parcels(
             ulpin = cadastral_standards.generate_ulpin(centroid.y, centroid.x, pid)
             bldg_features[b["id"]]["properties"]["parcel_ulpin"] = ulpin
 
-            area_m2 = round(poly_px.area * 0.09, 1)
-            b_area  = round(b["area_px"] * 0.09, 1)
+            area_m2 = round(poly_px.area * m2_per_px2, 1)
+            b_area  = round(b["area_px"] * m2_per_px2, 1)
             gcr     = round((b_area / area_m2) * 100.0, 1) if area_m2 > 0 else 0.0
 
             props = {
@@ -317,7 +362,7 @@ def generate_4factor_cadastral_parcels(
                 "area_m2": area_m2,
                 "area_guntha": round(area_m2 / 101.17, 3),
                 "area_sq_ft": round(area_m2 * 10.7639, 1),
-                "perimeter_m": round(poly_px.length * 0.3, 1),
+                "perimeter_m": round(poly_px.length * m_per_px, 1),
                 "landuse": landuse,
                 "building_count": 1,
                 "building_ids": [b["id"]],
@@ -327,7 +372,7 @@ def generate_4factor_cadastral_parcels(
                 "road_connected": True, "road_distance_m": 0.0,
                 "gps_lat": round(centroid.y, 6), "gps_lon": round(centroid.x, 6),
                 "traverse_points": cadastral_standards.extract_traverse_points(poly_geo),
-                "has_unrecorded_building": False, "alerts": [],
+                "has_unrecorded_building": bool(b.get("unrecorded", False)), "alerts": [],
             }
             parcels_list.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
             property_cards[str(pid)] = cadastral_standards.generate_cadastral_property_card(
