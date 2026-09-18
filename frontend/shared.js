@@ -9,8 +9,13 @@ var ALERT_META = {
 var SEV_COLOR = {critical:'#E2685F', warning:'#E0A94A', change:'#B694DA', ok:'#6CBE81'};
 var LANDUSE_COLOR = {
   'Residential':'#7C9BA6', 'Residential / Built-up':'#4EA195',
+  'Residential Homestead / Farmhouse':'#4EA195',
   'Commercial / Retail Complex':'#E0A94A', 'Commercial':'#6E8FB0',
-  'Government':'#E0A94A', 'Agricultural':'#8FAE5D',
+  'Ancillary / Shed Structure':'#8B9B90',
+  'Government':'#E0A94A',
+  'Agricultural':'#8FAE5D', 'Agricultural / Cultivated Cropland':'#8FAE5D', 'Agricultural / Cropland':'#8FAE5D',
+  'Tree Canopy / Orchard / Agro-Forestry':'#3E7B4A', 'Tree Canopy / Orchard':'#3E7B4A',
+  'Barren Land / Fallow Rural Ground':'#BFA27E', 'Barren Land':'#BFA27E',
   'Forest / Green Land':'#5FA37A', 'Industrial':'#B08D6B',
   'Transport & Highway Corridor':'#556872',
   'Vacant / Unclassified':'#485850', 'Vacant Plot / Open Land':'#485850'
@@ -115,6 +120,34 @@ function loadBaseLayers(map, meta, imgBlob, layers){
   if(layers.extracted_roads && layers.extracted_roads.features && layers.extracted_roads.features.length > 0){
     L.geoJSON(layers.extracted_roads, {
       style:{color:'#8A9A86', weight:3, opacity:0.75}
+    }).addTo(refLayerGroup);
+  }
+
+  // Drone extracted agricultural field bunds / ridges
+  if(layers.extracted_bunds && layers.extracted_bunds.features && layers.extracted_bunds.features.length > 0){
+    L.geoJSON(layers.extracted_bunds, {
+      style:{color:'#9EBA63', weight:2, opacity:0.8, dashArray:'3 3'}
+    }).addTo(refLayerGroup);
+  }
+
+  // Drone extracted vegetation & crop canopy
+  if(layers.extracted_vegetation && layers.extracted_vegetation.features && layers.extracted_vegetation.features.length > 0){
+    L.geoJSON(layers.extracted_vegetation, {
+      style:{color:'#5FA37A', weight:1.2, fillOpacity:0.18, fillColor:'#5FA37A'}
+    }).addTo(refLayerGroup);
+  }
+
+  // Drone extracted tree canopy & orchards
+  if(layers.extracted_trees && layers.extracted_trees.features && layers.extracted_trees.features.length > 0){
+    L.geoJSON(layers.extracted_trees, {
+      style:{color:'#2D6A4F', weight:1.5, fillOpacity:0.25, fillColor:'#2D6A4F'}
+    }).addTo(refLayerGroup);
+  }
+
+  // Drone extracted barren land / bare soil
+  if(layers.extracted_barren && layers.extracted_barren.features && layers.extracted_barren.features.length > 0){
+    L.geoJSON(layers.extracted_barren, {
+      style:{color:'#BFA27E', weight:1.2, fillOpacity:0.20, fillColor:'#BFA27E'}
     }).addTo(refLayerGroup);
   }
 

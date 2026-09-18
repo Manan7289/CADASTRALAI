@@ -17,13 +17,31 @@ from shapely.ops import unary_union, voronoi_diagram
 try:
     from ml.boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_physical_walls
     from ml.quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
+    from ml.vegetation_index import (
+        compute_visible_vegetation_and_soil_indices,
+        detect_agricultural_bunds,
+        analyze_parcel_landcover,
+        delineate_open_rural_parcels
+    )
 except ImportError:
     try:
         from .boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_physical_walls
         from .quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
+        from .vegetation_index import (
+            compute_visible_vegetation_and_soil_indices,
+            detect_agricultural_bunds,
+            analyze_parcel_landcover,
+            delineate_open_rural_parcels
+        )
     except ImportError:
         from boundary_detector import detect_physical_walls_and_fences, snap_polygon_to_physical_walls
         from quad_regularizer import regularize_to_quadrilateral, normalize_block_parcel_areas
+        from vegetation_index import (
+            compute_visible_vegetation_and_soil_indices,
+            detect_agricultural_bunds,
+            analyze_parcel_landcover,
+            delineate_open_rural_parcels
+        )
 
 
 def dominant_angles_from_segs(street_segs, n_bins=36):
@@ -72,9 +90,15 @@ def generate_4factor_cadastral_parcels(
     cadastral_standards,
     road_union: Polygon = None,
     meters_per_px: float = 0.3,
+    veg_mask: np.ndarray = None,
+    tree_mask: np.ndarray = None,
+    crop_mask: np.ndarray = None,
+    barren_mask: np.ndarray = None,
+    bund_segments: List[np.ndarray] = None,
 ) -> Tuple[List[Dict], List[Dict], Dict[str, Any]]:
     """
-    Generate clean, 4-factor regularized cadastral land parcels.
+    Generate clean, 4-factor regularized cadastral land parcels with vegetation,
+    tree canopy, and barren land attribution.
     
     Returns
     -------
@@ -89,6 +113,18 @@ def generate_4factor_cadastral_parcels(
 
     m_per_px = float(meters_per_px) if meters_per_px > 0 else 0.3
     m2_per_px2 = m_per_px ** 2
+
+    # ── Landcover & Vegetation Indices ───────────────────────────────────────
+    if veg_mask is None or tree_mask is None or barren_mask is None:
+        landcover = compute_visible_vegetation_and_soil_indices(img_bgr)
+        veg_mask = landcover["veg_mask"]
+        tree_mask = landcover["tree_mask"]
+        crop_mask = landcover["crop_mask"]
+        barren_mask = landcover["barren_mask"]
+        if bund_segments is None:
+            bund_segments = detect_agricultural_bunds(
+                img_bgr, crop_mask=crop_mask, barren_mask=barren_mask, meters_per_px=m_per_px
+            )
 
     # ── Factor 2: Detect Physical Compound Walls & Fences ────────────────────
     print("  [Factor 2] Extracting physical compound walls & fence boundaries...")
@@ -344,6 +380,26 @@ def generate_4factor_cadastral_parcels(
         for poly_px in polys:
             if poly_px.is_empty or poly_px.area < 50:
                 continue
+
+            lc_stats = analyze_parcel_landcover(
+                poly_px=poly_px,
+                veg_mask=veg_mask,
+                tree_mask=tree_mask,
+                barren_mask=barren_mask,
+                bldg_area_px=b["area_px"],
+                meters_per_px=m_per_px
+            )
+
+            if b.get("type") == "commercial":
+                landuse  = "Commercial / Retail Complex"
+                aoi_name = "Commercial Sector Survey"
+            elif b.get("type") == "shed":
+                landuse  = "Ancillary / Shed Structure"
+                aoi_name = "Residential Cadastral Survey"
+            else:
+                landuse  = lc_stats["landuse"]
+                aoi_name = "Residential Cadastral Survey" if "Residential" in landuse else "Rural Cadastral Survey"
+
             geo_pts = [px_to_lonlat_fn(float(x), float(y)) for x, y in poly_px.exterior.coords]
             poly_geo = Polygon(geo_pts)
             if not poly_geo.is_valid: poly_geo = poly_geo.buffer(0)
@@ -369,6 +425,14 @@ def generate_4factor_cadastral_parcels(
                 "built_up_area_m2": b_area,
                 "open_space_m2": max(0.0, round(area_m2 - b_area, 1)),
                 "ground_coverage_ratio_pct": gcr,
+                "vegetation_cover_pct": lc_stats["vegetation_cover_pct"],
+                "tree_cover_pct": lc_stats["tree_cover_pct"],
+                "crop_cover_pct": lc_stats["crop_cover_pct"],
+                "barren_cover_pct": lc_stats["barren_cover_pct"],
+                "crop_canopy_index": lc_stats["crop_canopy_index"],
+                "cultivable_area_m2": lc_stats["cultivable_area_m2"],
+                "cultivable_area_acres": lc_stats["cultivable_area_acres"],
+                "barren_area_m2": lc_stats["barren_area_m2"],
                 "road_connected": True, "road_distance_m": 0.0,
                 "gps_lat": round(centroid.y, 6), "gps_lon": round(centroid.x, 6),
                 "traverse_points": cadastral_standards.extract_traverse_points(poly_geo),
@@ -377,6 +441,80 @@ def generate_4factor_cadastral_parcels(
             parcels_list.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
             property_cards[str(pid)] = cadastral_standards.generate_cadastral_property_card(
                 props, poly_geo, [b["poly_geo"]], aoi_name=aoi_name)
+            pid += 1
+
+    # ── Delineate Open Rural Agricultural & Barren Land Parcels ───────────────
+    allocated_px = [b["parcel_poly_px"] for b in bldgs if "parcel_poly_px" in b]
+    rural_plots = delineate_open_rural_parcels(
+        crop_mask=crop_mask,
+        barren_mask=barren_mask,
+        bund_segments=bund_segments or [],
+        occupied_polys=allocated_px,
+        roi_box=roi_box,
+        meters_per_px=m_per_px,
+        min_area_m2=150.0
+    )
+
+    allocated_union = unary_union(allocated_px) if allocated_px else Polygon()
+    for r_plot_px in rural_plots:
+        if not allocated_union.is_empty:
+            diff = r_plot_px.difference(allocated_union)
+            if diff.is_empty or diff.area < (100.0 / m2_per_px2):
+                continue
+            r_plot_px = diff
+
+        sub_polys = [r_plot_px] if r_plot_px.geom_type == "Polygon" else list(r_plot_px.geoms)
+        for poly_px in sub_polys:
+            if poly_px.is_empty or poly_px.area < (100.0 / m2_per_px2):
+                continue
+            geo_pts = [px_to_lonlat_fn(float(x), float(y)) for x, y in poly_px.exterior.coords]
+            poly_geo = Polygon(geo_pts)
+            if not poly_geo.is_valid: poly_geo = poly_geo.buffer(0)
+            if poly_geo.is_empty or poly_geo.area <= 0: continue
+
+            centroid = poly_geo.centroid
+            ulpin = cadastral_standards.generate_ulpin(centroid.y, centroid.x, pid)
+            area_m2 = round(poly_px.area * m2_per_px2, 1)
+
+            lc_stats = analyze_parcel_landcover(
+                poly_px=poly_px,
+                veg_mask=veg_mask,
+                tree_mask=tree_mask,
+                barren_mask=barren_mask,
+                bldg_area_px=0.0,
+                meters_per_px=m_per_px
+            )
+            landuse = lc_stats["landuse"]
+            aoi_name = "Agricultural & Rural Survey" if "Agricultural" in landuse else "Rural Land Survey"
+
+            props = {
+                "id": pid, "ulpin": ulpin,
+                "area_m2": area_m2,
+                "area_guntha": round(area_m2 / 101.17, 3),
+                "area_sq_ft": round(area_m2 * 10.7639, 1),
+                "perimeter_m": round(poly_px.length * m_per_px, 1),
+                "landuse": landuse,
+                "building_count": 0,
+                "building_ids": [],
+                "built_up_area_m2": 0.0,
+                "open_space_m2": area_m2,
+                "ground_coverage_ratio_pct": 0.0,
+                "vegetation_cover_pct": lc_stats["vegetation_cover_pct"],
+                "tree_cover_pct": lc_stats["tree_cover_pct"],
+                "crop_cover_pct": lc_stats["crop_cover_pct"],
+                "barren_cover_pct": lc_stats["barren_cover_pct"],
+                "crop_canopy_index": lc_stats["crop_canopy_index"],
+                "cultivable_area_m2": lc_stats["cultivable_area_m2"],
+                "cultivable_area_acres": lc_stats["cultivable_area_acres"],
+                "barren_area_m2": lc_stats["barren_area_m2"],
+                "road_connected": False, "road_distance_m": 0.0,
+                "gps_lat": round(centroid.y, 6), "gps_lon": round(centroid.x, 6),
+                "traverse_points": cadastral_standards.extract_traverse_points(poly_geo),
+                "has_unrecorded_building": False, "alerts": [],
+            }
+            parcels_list.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
+            property_cards[str(pid)] = cadastral_standards.generate_cadastral_property_card(
+                props, poly_geo, [], aoi_name=aoi_name)
             pid += 1
 
     print(f"  [Factor 4] Total regularized cadastral parcels: {len(parcels_list)} (0 Overlaps Guaranteed)")

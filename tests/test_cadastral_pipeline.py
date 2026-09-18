@@ -26,7 +26,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 sys.path.insert(0, str(BACKEND_DIR / "ml"))
 
 import cadastral_standards
-from ml import parcel_engine
+from ml import parcel_engine, vegetation_index
 import upload_pipeline
 
 
@@ -187,6 +187,65 @@ class TestCadastralPipeline(unittest.TestCase):
         first_p = parcels_data["features"][0]
         self.assertTrue(cadastral_standards.validate_ulpin(first_p["properties"]["ulpin"]))
         self.assertGreater(first_p["properties"]["area_m2"], 0)
+
+    def test_06_visible_vegetation_and_barren_land_indices(self):
+        """Verify mathematical calculation and masking of ExG, VARI, and Soil Tone Index (STI)."""
+        h, w = 60, 60
+        synth_img = np.zeros((h, w, 3), dtype=np.uint8)
+        synth_img[:20, :] = [30, 160, 40]   # Vegetation / Green
+        synth_img[20:40, :] = [60, 110, 180] # Barren Land / Brown-Red soil
+        synth_img[40:, :] = [120, 120, 120]  # Neutral Grey road
+
+        res = vegetation_index.compute_visible_vegetation_and_soil_indices(synth_img)
+        
+        # 1. Vegetation checks
+        self.assertGreater(res["exg"][:20, :].mean(), 0.10, "Vegetation must produce strongly positive ExG")
+        self.assertGreater(res["vari"][:20, :].mean(), 0.05, "Vegetation must produce positive VARI")
+        self.assertGreater(res["veg_mask"][:20, :].mean(), 200, "Vegetation patch must be flagged in veg_mask")
+        self.assertEqual(res["veg_mask"][20:40, :].max(), 0, "Barren land must NOT be flagged as vegetation")
+
+        # 2. Barren land checks
+        self.assertGreater(res["sti"][20:40, :].mean(), 0.15, "Barren earth must produce strong Soil Tone Index")
+        self.assertGreater(res["barren_mask"][20:40, :].mean(), 200, "Barren patch must be flagged in barren_mask")
+        self.assertEqual(res["barren_mask"][:20, :].max(), 0, "Vegetation must NOT be flagged as barren")
+        self.assertEqual(res["barren_mask"][40:, :].max(), 0, "Neutral grey road must NOT be flagged as barren")
+
+    def test_07_rural_parcel_landcover_classification(self):
+        """Verify landcover attribution and classification for Cropland, Tree Canopy, and Barren Land."""
+        w, h = 100, 100
+        # 1. Test Cropland Parcel
+        crop_mask = np.zeros((h, w), dtype=np.uint8)
+        crop_mask[10:90, 10:90] = 255
+        tree_mask = np.zeros((h, w), dtype=np.uint8)
+        barren_mask = np.zeros((h, w), dtype=np.uint8)
+        veg_mask = crop_mask.copy()
+
+        p_poly = box(10, 10, 90, 90)
+        stats_crop = vegetation_index.analyze_parcel_landcover(
+            poly_px=p_poly,
+            veg_mask=veg_mask,
+            tree_mask=tree_mask,
+            barren_mask=barren_mask,
+            bldg_area_px=0.0,
+            meters_per_px=0.3
+        )
+        self.assertEqual(stats_crop["landuse"], "Agricultural / Cultivated Cropland")
+        self.assertGreater(stats_crop["vegetation_cover_pct"], 90.0)
+
+        # 2. Test Barren Land Parcel
+        barren_mask[10:90, 10:90] = 255
+        crop_mask.fill(0)
+        veg_mask.fill(0)
+        stats_barren = vegetation_index.analyze_parcel_landcover(
+            poly_px=p_poly,
+            veg_mask=veg_mask,
+            tree_mask=tree_mask,
+            barren_mask=barren_mask,
+            bldg_area_px=0.0,
+            meters_per_px=0.3
+        )
+        self.assertEqual(stats_barren["landuse"], "Barren Land / Fallow Rural Ground")
+        self.assertGreater(stats_barren["barren_cover_pct"], 90.0)
 
 
 if __name__ == "__main__":

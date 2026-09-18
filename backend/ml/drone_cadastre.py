@@ -16,6 +16,14 @@ from scipy.spatial import Voronoi
 from shapely.geometry import Polygon, MultiPolygon, box
 from shapely.ops import unary_union
 
+try:
+    from ml.vegetation_index import compute_visible_vegetation_and_soil_indices, detect_agricultural_bunds
+except ImportError:
+    try:
+        from .vegetation_index import compute_visible_vegetation_and_soil_indices, detect_agricultural_bunds
+    except ImportError:
+        from vegetation_index import compute_visible_vegetation_and_soil_indices, detect_agricultural_bunds
+
 MIN_PARCEL_M2 = 30.0
 MAX_PARCEL_M2 = 25000.0
 MIN_BUILDING_M2 = 20.0
@@ -23,10 +31,11 @@ MAX_BUILDING_M2 = 3500.0
 
 
 def extract_drone_features(img_arr: np.ndarray, meters_per_px: float) -> Dict:
-    """Extract physical boundary walls, roads, buildings, and delineated parcels
-    directly from drone aerial imagery."""
+    """Extract physical boundary walls, roads, buildings, vegetation, barren land,
+    and delineated parcels directly from drone aerial imagery."""
     h, w = img_arr.shape[:2]
-    gray = cv2.cvtColor(img_arr, cv2.COLOR_RGB2GRAY) if len(img_arr.shape) == 3 else img_arr
+    img_bgr = cv2.cvtColor(img_arr, cv2.COLOR_RGB2BGR) if len(img_arr.shape) == 3 else cv2.cvtColor(img_arr, cv2.COLOR_GRAY2BGR)
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
     # 1. Multi-scale Edge & Boundary Wall Detection
     # Drone boundary walls appear as high-gradient ridges separating courtyards/plots
@@ -163,13 +172,30 @@ def extract_drone_features(img_arr: np.ndarray, meters_per_px: float) -> Dict:
             if len(approx) >= 2:
                 walls_px.append(approx)
 
+    # 5. Extract Visible Vegetation, Tree Canopy, and Barren Land Features
+    landcover = compute_visible_vegetation_and_soil_indices(img_bgr)
+    bund_segments = detect_agricultural_bunds(
+        img_bgr,
+        crop_mask=landcover["crop_mask"],
+        barren_mask=landcover["barren_mask"],
+        meters_per_px=meters_per_px
+    )
+
     return {
         "buildings_px": buildings_px,
         "parcels_px": parcels_px,
         "roads_px": roads_px,
         "walls_px": walls_px,
+        "bunds_px": bund_segments,
         "wall_mask": wall_mask,
         "road_mask": road_mask,
+        "veg_mask": landcover["veg_mask"],
+        "tree_mask": landcover["tree_mask"],
+        "crop_mask": landcover["crop_mask"],
+        "barren_mask": landcover["barren_mask"],
+        "exg": landcover["exg"],
+        "vari": landcover["vari"],
+        "sti": landcover["sti"],
     }
 
 

@@ -315,7 +315,10 @@ def generate_cadastral_property_card(parcel_props: Dict, parcel_geom: Polygon, b
         <tr><td class="k">Regional Measure</td><td class="v">{metrics['area_guntha']} Guntha / {metrics['area_acres']} Acres</td></tr>
         <tr><td class="k">Perimeter</td><td class="v">{metrics['perimeter_m']} m</td></tr>
         <tr><td class="k">Built-up Footprint Area</td><td class="v">{metrics['built_up_area_m2']} m²</td></tr>
-        <tr><td class="k">Open Yard Area</td><td class="v">{metrics['open_space_m2']} m²</td></tr>
+        <tr><td class="k">Open Yard / Ground Area</td><td class="v">{metrics['open_space_m2']} m²</td></tr>
+        <tr><td class="k">Cultivable / Cropland Area</td><td class="v">{parcel_props.get('cultivable_area_m2', 0.0)} m² ({parcel_props.get('cultivable_area_acres', 0.0)} Acres)</td></tr>
+        <tr><td class="k">Vegetation & Tree Canopy</td><td class="v">{parcel_props.get('vegetation_cover_pct', 0.0)}% (Trees: {parcel_props.get('tree_cover_pct', 0.0)}%)</td></tr>
+        <tr><td class="k">Barren / Fallow Soil</td><td class="v">{parcel_props.get('barren_cover_pct', 0.0)}% ({parcel_props.get('barren_area_m2', 0.0)} m²)</td></tr>
         <tr><td class="k">Ground Coverage Ratio</td><td class="v">{metrics['ground_coverage_ratio_pct']}%</td></tr>
         <tr><td class="k">Road Frontage Status</td><td class="v">{road_status}</td></tr>
         <tr><td class="k">Centroid Coordinates</td><td class="v">{parcel_props['gps_lat']:.6f}° N, {parcel_props['gps_lon']:.6f}° E</td></tr>

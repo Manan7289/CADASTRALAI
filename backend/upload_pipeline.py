@@ -127,7 +127,9 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
     roads_px = features["roads_px"]
     walls_px = features["walls_px"]
 
-    # 2. Extract Road & Boundary Wall Vector Layers
+    bunds_px = features.get("bunds_px", [])
+
+    # 2. Extract Road, Boundary Wall, Bund, and Landcover Vector Layers
     roads_fc = {"type": "FeatureCollection", "features": []}
     road_lines = []
     for i, r_pts in enumerate(roads_px):
@@ -150,10 +152,53 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
                 "geometry": {"type": "LineString", "coordinates": coords},
             })
 
+    bunds_fc = {"type": "FeatureCollection", "features": []}
+    for i, b_seg in enumerate(bunds_px):
+        coords = [px_to_lonlat(float(px), float(py)) for px, py in b_seg]
+        if len(coords) >= 2:
+            bunds_fc["features"].append({
+                "type": "Feature",
+                "properties": {"id": i, "type": "agricultural_bund"},
+                "geometry": {"type": "LineString", "coordinates": coords},
+            })
+
+    # Vectorize major vegetation and barren land polygons for GIS overlay
+    min_feature_px = max(10, int(80.0 / (meters_per_px ** 2)))
+    veg_fc = {"type": "FeatureCollection", "features": []}
+    tree_fc = {"type": "FeatureCollection", "features": []}
+    barren_fc = {"type": "FeatureCollection", "features": []}
+
+    def _mask_to_geojson(mask, fc, layer_name, max_ctrs=40):
+        ctrs, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        valid = [c for c in ctrs if cv2.contourArea(c) >= min_feature_px]
+        valid.sort(key=lambda c: cv2.contourArea(c), reverse=True)
+        for idx, c in enumerate(valid[:max_ctrs]):
+            eps = 0.02 * cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
+            if len(approx) >= 3:
+                geo_pts = [px_to_lonlat(float(x), float(y)) for x, y in approx]
+                if geo_pts[0] != geo_pts[-1]:
+                    geo_pts.append(geo_pts[0])
+                poly_geo = Polygon(geo_pts)
+                if not poly_geo.is_valid: poly_geo = poly_geo.buffer(0)
+                if not poly_geo.is_empty and poly_geo.area > 0:
+                    fc["features"].append({
+                        "type": "Feature",
+                        "properties": {"id": idx, "type": layer_name, "area_m2": round(cv2.contourArea(c) * (meters_per_px ** 2), 1)},
+                        "geometry": mapping(poly_geo)
+                    })
+
+    if "crop_mask" in features:
+        _mask_to_geojson(features["crop_mask"], veg_fc, "cropland_vegetation")
+    if "tree_mask" in features:
+        _mask_to_geojson(features["tree_mask"], tree_fc, "tree_canopy")
+    if "barren_mask" in features:
+        _mask_to_geojson(features["barren_mask"], barren_fc, "barren_land")
+
     # 3. Reference OSM Layers (Roads, Water, Rail, Govt Land) for statutory buffer checks
     bbox = (geo["lat_se"], geo["lon_nw"], geo["lat_nw"], geo["lon_se"])
     try:
-        live_ref = fetch_data.fetch_all(bbox)
+        live_ref = fetch_data.fetch_all(bbox, timeout=8, attempts=1)
     except Exception as e:
         print(f"[upload] OSM fetch fallback: {e}")
         live_ref = {
@@ -218,7 +263,7 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
             "type": "residential" if area_px < (350.0 / (meters_per_px ** 2)) else "commercial",
         })
 
-    # 5. Execute 4-Factor Cadastral Parcel Engine (Physical Walls, Rectangularization, 0-Overlap)
+    # 5. Execute 4-Factor Cadastral Parcel Engine (Physical Walls, Rectangularization, 0-Overlap, Vegetation & Barren Attribution)
     img_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
     roi_box = box(0, 0, proc_w, proc_h)
     parcels_list, bldg_features, property_cards = parcel_engine.generate_4factor_cadastral_parcels(
@@ -230,6 +275,11 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         cadastral_standards=cadastral_standards,
         road_union=road_union_px,
         meters_per_px=meters_per_px,
+        veg_mask=features.get("veg_mask"),
+        tree_mask=features.get("tree_mask"),
+        crop_mask=features.get("crop_mask"),
+        barren_mask=features.get("barren_mask"),
+        bund_segments=bunds_px,
     )
 
     buildings_fc = {"type": "FeatureCollection", "features": bldg_features}
@@ -274,17 +324,29 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         "government": live_ref["government"],
         "extracted_walls": walls_fc,
         "extracted_roads": roads_fc,
+        "extracted_bunds": bunds_fc,
+        "extracted_vegetation": veg_fc,
+        "extracted_trees": tree_fc,
+        "extracted_barren": barren_fc,
     }), encoding="utf-8")
     (session_dir / "reports.json").write_text(json.dumps(reports), encoding="utf-8")
     (session_dir / "property_cards.json").write_text(json.dumps(property_cards), encoding="utf-8")
 
+    # Overall survey landcover statistics
+    total_px = float(proc_w * proc_h)
+    veg_cov = round((float(np.count_nonzero(features["veg_mask"])) / total_px) * 100.0, 1) if "veg_mask" in features else 0.0
+    barren_cov = round((float(np.count_nonzero(features["barren_mask"])) / total_px) * 100.0, 1) if "barren_mask" in features else 0.0
+
     (session_dir / "metrics.json").write_text(json.dumps({
         "method": "drone_cadastral_ai",
-        "note": "Extracted via AI Drone Cadastral Feature Engine: Physical Boundary Walls, Access Road Corridors, and Planar Watershed Partitioning. Parcels conform to SVAMITVA / ULPIN standards.",
+        "note": "Extracted via AI Drone Cadastral Feature Engine: Physical Boundary Walls, Access Road Corridors, Agricultural Bunds, Vegetation & Barren Land Identification. Parcels conform to SVAMITVA / ULPIN standards.",
         "buildings_detected": len(bldgs),
         "parcels_delineated": len(parcels_list),
         "boundary_walls_detected": len(walls_px),
         "roads_detected": len(roads_px),
+        "agricultural_bunds_detected": len(bunds_px),
+        "survey_vegetation_cover_pct": veg_cov,
+        "survey_barren_land_cover_pct": barren_cov,
         "processing_seconds": round(time.time() - t0, 2),
         "gsd_cm_px": round(meters_per_px * 100.0, 2),
     }), encoding="utf-8")
