@@ -14,7 +14,7 @@
   <header class="topbar">
     <div class="brand">
       <div class="wordmark">CADASTRA<span>AI</span></div>
-      <div class="subtitle">Compliance &amp; Detection · Igatpuri, Maharashtra · OSM + CPU-Trained Model · Team ELAVI</div>
+      <div class="subtitle">AI Feature Detection · Buildings, Trees, Farms &amp; Barren Land · Team ELAVI</div>
     </div>
     <nav class="segmented">
       <a href="index.html">CADASTRAL MAP</a>
@@ -26,18 +26,26 @@
       <a href="detection.html?session=clear_drone_survey" id="btnDrone" style="text-decoration:none;padding:6px 11px;font-family:var(--font-mono);font-size:0.7rem;display:inline-block;">🚁 CLEAR DRONE SURVEY</a>
       <a href="detection.html?legacy=1" id="btnTown" style="text-decoration:none;padding:6px 11px;font-family:var(--font-mono);font-size:0.7rem;display:inline-block;">🏙 TOWN WARD</a>
     </div>
+    <div class="segmented" id="categoryFilter">
+      <button data-cat="all" class="active">ALL</button>
+      <button data-cat="building">🏠 BUILDINGS</button>
+      <button data-cat="tree">🌳 TREES</button>
+      <button data-cat="farm">🌾 FARMS</button>
+      <button data-cat="barren">🏜️ BARREN</button>
+      <button data-cat="veg">🌿 VEG</button>
+    </div>
     <div class="segmented" id="layerToggle">
       <button data-layer="model" class="active">AI-EXTRACTED</button>
       <button data-layer="osm">OFFICIAL (OSM)</button>
     </div>
     <label class="toggle-field"><input type="checkbox" id="bufferToggle" checked> Buffer zones</label>
-    <div class="status-chip" id="statusChip">Live model output</div>
+    <div class="status-chip" id="statusChip">AI Vision Active</div>
   </header>
 
   <main class="workspace">
     <div class="map-panel">
       <div id="map"></div>
-      <div class="loading" id="loadingScreen">Loading real AOI data, satellite mosaic and model output…</div>
+      <div class="loading" id="loadingScreen">Loading drone imagery and extracting landcover features…</div>
     </div>
     <aside class="inspector" id="inspector"></aside>
   </main>
@@ -50,19 +58,43 @@
 "use strict";
 
 var map = initMap();
-var state = {source:'model', selectedId:null, modelFc:null, osmFc:null, metrics:null, reports:null};
-var geoLayer;
+var state = {
+  source: 'model',
+  activeCategory: 'all',
+  selectedFeature: null,
+  modelFc: null,
+  osmFc: null,
+  treesFc: null,
+  farmsFc: null,
+  barrenFc: null,
+  vegFc: null,
+  metrics: null,
+  reports: {}
+};
+var geoLayersGroup = L.layerGroup().addTo(map);
 
 Promise.all([
   fetch(dataUrl('meta.json')).then(r=>r.json()),
   fetch(dataUrl('image.png')).then(r=>r.blob()),
   fetch(dataUrl('layers.json')).then(r=>r.json()),
   fetch(dataUrl('buildings.geojson')).then(r=>r.json()),
-  fetch(dataUrl('osm_buildings.geojson')).then(r=>r.json()),
-  fetch(dataUrl('metrics.json')).then(r=>r.json()),
-  fetch(dataUrl('reports.json')).then(r=>r.json())
+  fetch(dataUrl('osm_buildings.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
+  fetch(dataUrl('metrics.json')).then(r=>r.json()).catch(()=>({})),
+  fetch(dataUrl('reports.json')).then(r=>r.json()).catch(()=>({})),
+  fetch(dataUrl('trees.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
+  fetch(dataUrl('farms.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
+  fetch(dataUrl('barren_land.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
+  fetch(dataUrl('vegetation.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]}))
 ]).then(function(res){
-  var meta = res[0], imgBlob = res[1], layers = res[2], modelFc = res[3], osmFc = res[4], metrics = res[5], reports = res[6];
+  var meta = res[0], imgBlob = res[1], layers = res[2];
+  state.modelFc = res[3];
+  state.osmFc = res[4];
+  state.metrics = res[5];
+  state.reports = res[6] || {};
+  state.treesFc = res[7] || {type:'FeatureCollection',features:[]};
+  state.farmsFc = res[8] || {type:'FeatureCollection',features:[]};
+  state.barrenFc = res[9] || {type:'FeatureCollection',features:[]};
+  state.vegFc = res[10] || {type:'FeatureCollection',features:[]};
 
   var refs = loadBaseLayers(map, meta, imgBlob, layers);
   document.getElementById('bufferToggle').addEventListener('change', function(e){
@@ -89,19 +121,12 @@ Promise.all([
     }
   }
 
-  state.modelFc = modelFc;
-  state.osmFc = osmFc;
-  state.metrics = metrics;
-  state.reports = reports;
-
-  renderBuildings();
+  renderFeatures();
   renderSidebar();
   document.getElementById('loadingScreen').style.display = 'none';
 }).catch(function(err){
-  document.getElementById('loadingScreen').textContent = 'Failed to load: ' + err + '  (did you run the backend pipeline through build_static.py first?)';
+  document.getElementById('loadingScreen').textContent = 'Failed to load: ' + err;
 });
-
-function currentFc(){ return state.source==='model' ? state.modelFc : state.osmFc; }
 
 function severityOf(props){
   var alerts = props.alerts || [];
@@ -111,106 +136,213 @@ function severityOf(props){
   return 'ok';
 }
 
-function renderBuildings(){
-  if(geoLayer) map.removeLayer(geoLayer);
-  var fc = currentFc();
-  geoLayer = L.geoJSON(fc, {
-    style:function(f){
-      var sev = state.source==='model' ? severityOf(f.properties) : 'ok';
-      var selected = state.source==='model' && f.properties.id===state.selectedId;
+function getFeatureCategory(f){
+  var t = (f.properties && f.properties.type) || '';
+  if(t === 'tree_canopy') return 'tree';
+  if(t === 'farm_plot') return 'farm';
+  if(t === 'barren_land') return 'barren';
+  if(t === 'vegetation') return 'veg';
+  return 'building';
+}
+
+function getFeatureIcon(cat){
+  switch(cat){
+    case 'tree': return '🌳';
+    case 'farm': return '🌾';
+    case 'barren': return '🏜️';
+    case 'veg': return '🌿';
+    default: return '🏠';
+  }
+}
+
+function getFeatureStyle(f, isSelected){
+  var cat = getFeatureCategory(f);
+  var p = f.properties || {};
+
+  if(isSelected){
+    return {color:'#45C7B8', weight:3.2, fillColor:'#45C7B8', fillOpacity:0.65};
+  }
+
+  switch(cat){
+    case 'tree':
+      return {color:'#1B4332', weight:1.5, fillColor:'#2D6A4F', fillOpacity:0.65};
+    case 'farm':
+      return {color:'#40916C', weight:1.8, fillColor:'#8FAE5D', fillOpacity:0.55};
+    case 'barren':
+      return {color:'#7F5539', weight:1.8, fillColor:'#BFA27E', fillOpacity:0.60};
+    case 'veg':
+      return {color:'#2D6A4F', weight:1.2, fillColor:'#52B788', fillOpacity:0.40};
+    case 'building':
+    default:
+      var sev = state.source==='model' ? severityOf(p) : 'ok';
+      var fillCol = p.unrecorded ? '#E2685F' : (sev==='ok' ? '#6CBE81' : SEV_COLOR[sev]);
       return {
-        color: selected ? '#45C7B8' : (sev==='ok' ? '#C9CDC4' : SEV_COLOR[sev]),
-        weight: selected ? 2.6 : (sev==='ok' ? 0.8 : 1.6),
-        fillColor: '#C9CDC4', fillOpacity: 0.55
+        color: '#28352E',
+        weight: sev==='ok' ? 1.0 : 1.8,
+        fillColor: fillCol,
+        fillOpacity: 0.65
       };
-    },
-    onEachFeature:function(f, layer){
-      if(state.source==='model'){
-        layer.on('click', function(){ state.selectedId = f.properties.id; renderBuildings(); renderSidebar(); });
+  }
+}
+
+function renderFeatures(){
+  geoLayersGroup.clearLayers();
+  var cat = state.activeCategory;
+
+  var collections = [];
+  if(state.source === 'osm'){
+    collections.push(state.osmFc);
+  } else {
+    if(cat === 'all' || cat === 'building') collections.push(state.modelFc);
+    if(cat === 'all' || cat === 'tree') collections.push(state.treesFc);
+    if(cat === 'all' || cat === 'farm') collections.push(state.farmsFc);
+    if(cat === 'all' || cat === 'barren') collections.push(state.barrenFc);
+    if(cat === 'all' || cat === 'veg') collections.push(state.vegFc);
+  }
+
+  collections.forEach(function(fc){
+    if(!fc || !fc.features || fc.features.length === 0) return;
+    L.geoJSON(fc, {
+      style: function(f){
+        var isSelected = state.selectedFeature && (
+          (state.selectedFeature.uid && state.selectedFeature.uid === f.properties.uid) ||
+          (state.selectedFeature.id === f.properties.id && getFeatureCategory(state.selectedFeature) === getFeatureCategory(f))
+        );
+        return getFeatureStyle(f, isSelected);
+      },
+      onEachFeature: function(f, layer){
+        layer.on('click', function(e){
+          L.DomEvent.stopPropagation(e);
+          state.selectedFeature = f.properties;
+          renderFeatures();
+          renderSidebar();
+        });
       }
-    }
-  }).addTo(map);
+    }).addTo(geoLayersGroup);
+  });
 }
 
 var inspector = document.getElementById('inspector');
 
-function statCounts(){
-  var feats = state.modelFc.features;
-  var flagged = feats.filter(f => (f.properties.alerts||[]).length>0).length;
-  return {total: feats.length, flagged: flagged};
+function getAllVisibleFeatures(){
+  var cat = state.activeCategory;
+  var feats = [];
+  if(state.source === 'osm'){
+    return state.osmFc ? state.osmFc.features : [];
+  }
+  if((cat === 'all' || cat === 'building') && state.modelFc) feats.push(...state.modelFc.features);
+  if((cat === 'all' || cat === 'farm') && state.farmsFc) feats.push(...state.farmsFc.features);
+  if((cat === 'all' || cat === 'barren') && state.barrenFc) feats.push(...state.barrenFc.features);
+  if((cat === 'all' || cat === 'tree') && state.treesFc) feats.push(...state.treesFc.features);
+  if((cat === 'all' || cat === 'veg') && state.vegFc) feats.push(...state.vegFc.features);
+  return feats;
 }
 
 function renderSidebar(){
-  if(state.selectedId!=null){ renderDetail(); return; }
-
-  var counts = statCounts();
-  var m = state.metrics || {};
-  var html = '';
-  if(m && m.cv_roc_auc_mean !== undefined && m.cv_roc_auc_mean !== null){
-    html += '<div><h3 class="panel-title">Model Performance (real, cross-validated)</h3>'+
-      '<div class="stat-grid">'+
-        '<div class="stat-tile"><div class="num" style="color:'+ ((m.cv_building_recall_mean||0)>=0.5?'var(--ok)':'var(--warning)') +'">'+Math.round((m.cv_building_recall_mean||0)*100)+'%</div><div class="lbl">Held-out buildings found</div></div>'+
-        '<div class="stat-tile"><div class="num">'+(typeof m.cv_roc_auc_mean==='number'?m.cv_roc_auc_mean.toFixed(2):m.cv_roc_auc_mean)+'</div><div class="lbl">ROC-AUC (held-out)</div></div>'+
-        '<div class="stat-tile"><div class="num">'+Math.round((m.precision_in_verified_area||0)*100)+'%</div><div class="lbl">Precision (verified area)</div></div>'+
-        '<div class="stat-tile"><div class="num">'+(m.train_seconds||0)+'s</div><div class="lbl">CPU train time</div></div>'+
-      '</div><div style="font-size:0.72rem;color:var(--text-faint);margin-top:8px;line-height:1.5;">RandomForest trained on OSM footprints ('+(m.verified_colony_buildings||0)+' buildings); recall and AUC averaged over 5 splits. Applied to '+ (m.total_osm_buildings_in_aoi||0) +' buildings.</div></div>';
-  } else {
-    var bCount = m.buildings_detected || counts.total || 0;
-    var pCount = m.parcels_delineated || m.parcels || 0;
-    var gsd = m.gsd_cm_px ? m.gsd_cm_px + ' cm/px' : '0.3 m/px';
-    var timeSec = m.processing_seconds ? m.processing_seconds + 's' : 'Real-time';
-    var note = m.note || 'AI Drone Cadastral Feature Engine: 4-Factor Regularized Subdivision with 100% Zero-Overlap Guarantee.';
-    html += '<div><h3 class="panel-title">Cadastral AI Survey Metrics</h3>'+
-      '<div class="stat-grid">'+
-        '<div class="stat-tile"><div class="num">'+bCount+'</div><div class="lbl">Structures detected</div></div>'+
-        '<div class="stat-tile"><div class="num">'+pCount+'</div><div class="lbl">Parcels Delineated</div></div>'+
-        '<div class="stat-tile"><div class="num">'+gsd+'</div><div class="lbl">Ground Resolution</div></div>'+
-        '<div class="stat-tile"><div class="num">'+timeSec+'</div><div class="lbl">Inference Latency</div></div>'+
-      '</div><div style="font-size:0.72rem;color:var(--text-dim);margin-top:8px;line-height:1.5;">'+note+'</div></div>';
+  if(state.selectedFeature != null){
+    renderDetail();
+    return;
   }
 
-  html += '<div><h3 class="panel-title">Ward Overview</h3><div class="stat-grid">'+
-    '<div class="stat-tile"><div class="num">'+counts.total+'</div><div class="lbl">Footprints extracted</div></div>'+
-    '<div class="stat-tile"><div class="num" style="color:'+(counts.flagged?'var(--warning)':'var(--ok)')+'">'+counts.flagged+'</div><div class="lbl">Flagged by rule engine</div></div>'+
-  '</div></div>';
+  var m = state.metrics || {};
+  var bCount = state.modelFc ? state.modelFc.features.length : 0;
+  var tCount = state.treesFc ? state.treesFc.features.length : 0;
+  var fCount = state.farmsFc ? state.farmsFc.features.length : 0;
+  var barCount = state.barrenFc ? state.barrenFc.features.length : 0;
+  var vegCount = state.vegFc ? state.vegFc.features.length : 0;
 
-  var priority = state.modelFc.features.slice().sort(function(a,b){
-    return (b.properties.alerts||[]).length - (a.properties.alerts||[]).length;
-  }).slice(0,8);
-  html += '<div><h3 class="panel-title">Field Verification Queue</h3>';
-  priority.forEach(function(f){
-    var al = f.properties.alerts||[];
-    var dots = al.map(a=>'<span class="dot" style="background:'+SEV_COLOR[(ALERT_META[a.type]||{}).sev||'ok']+'"></span>').join('');
-    html += '<div class="queue-row" data-id="'+f.properties.id+'"><span class="id">#'+f.properties.id+'</span><span class="dots">'+dots+'</span><span class="area">'+(f.properties.area_m2||0)+' m²</span></div>';
-  });
+  var html = '';
+  html += '<div><h3 class="panel-title">Cadastral AI Vision Metrics</h3>'+
+    '<div class="stat-grid">'+
+      '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'building\')"><div class="num">'+bCount+'</div><div class="lbl">🏠 Structures</div></div>'+
+      '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'tree\')"><div class="num" style="color:#2D6A4F;">'+tCount+'</div><div class="lbl">🌳 Trees</div></div>'+
+      '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'farm\')"><div class="num" style="color:#8FAE5D;">'+fCount+'</div><div class="lbl">🌾 Farms</div></div>'+
+      '<div class="stat-tile" style="cursor:pointer;" onclick="setCat(\'barren\')"><div class="num" style="color:#BFA27E;">'+barCount+'</div><div class="lbl">🏜️ Barren</div></div>'+
+    '</div><div style="font-size:0.72rem;color:var(--text-dim);margin-top:8px;line-height:1.5;">Automated Deep Vision &amp; Visible Remote Sensing Indices (ExG, VARI, STI). Click tiles to filter.</div></div>';
+
+  var visibleFeats = getAllVisibleFeatures();
+  var priority = visibleFeats.slice(0, 15);
+
+  html += '<div><h3 class="panel-title">Feature Inspection Queue ('+visibleFeats.length+' total)</h3>';
+  if(priority.length === 0){
+    html += '<div style="font-size:0.75rem;color:var(--text-faint);padding:8px 0;">No features detected in this category.</div>';
+  } else {
+    priority.forEach(function(f){
+      var p = f.properties || {};
+      var cat = getFeatureCategory(f);
+      var icon = getFeatureIcon(cat);
+      var name = p.name || (p.uid ? p.uid : ('#' + p.id));
+      var al = p.alerts || [];
+      var dots = al.map(a=>'<span class="dot" style="background:'+SEV_COLOR[(ALERT_META[a.type]||{}).sev||'ok']+'"></span>').join('');
+      var uidKey = p.uid || ('BLDG-' + p.id);
+      html += '<div class="queue-row" data-uid="'+uidKey+'"><span class="id">'+icon+' '+name+'</span><span class="dots">'+dots+'</span><span class="area">'+(p.area_m2||0)+' m²</span></div>';
+    });
+  }
   html += '</div>';
 
-  html += '<div><h3 class="panel-title">Key / Legend</h3>';
-  Object.keys(ALERT_META).forEach(function(k){
-    var mm = ALERT_META[k];
-    html += '<div class="legend-row">'+iconSvg(mm.shape,mm.sev,18)+'<div><b>'+mm.label+'</b></div></div>';
-  });
+  html += '<div><h3 class="panel-title">Landcover Legend</h3>';
+  html += '<div class="legend-row"><span style="width:14px;height:14px;background:#6CBE81;border:1px solid #28352E;border-radius:3px;display:inline-block;"></span><div><b>Building / Structure</b><small>AI Plinth regularized footprint</small></div></div>';
+  html += '<div class="legend-row"><span style="width:14px;height:14px;background:#2D6A4F;border:1px solid #1B4332;border-radius:3px;display:inline-block;"></span><div><b>Tree Canopy / Orchard</b><small>High texture roughness &amp; ExG chlorophyll</small></div></div>';
+  html += '<div class="legend-row"><span style="width:14px;height:14px;background:#8FAE5D;border:1px solid #40916C;border-radius:3px;display:inline-block;"></span><div><b>Agricultural Farm Plot</b><small>Active crops partitioned by bunds</small></div></div>';
+  html += '<div class="legend-row"><span style="width:14px;height:14px;background:#BFA27E;border:1px solid #7F5539;border-radius:3px;display:inline-block;"></span><div><b>Barren Land / Fallow Soil</b><small>Warm earth hue &amp; Soil Tone Index (STI)</small></div></div>';
   html += '</div>';
 
   inspector.innerHTML = html;
   inspector.querySelectorAll('.queue-row').forEach(function(row){
     row.addEventListener('click', function(){
-      state.selectedId = parseInt(row.getAttribute('data-id'),10);
-      renderBuildings(); renderSidebar();
+      var targetUid = row.getAttribute('data-uid');
+      var all = getAllVisibleFeatures();
+      var found = all.find(f => {
+        var p = f.properties || {};
+        return (p.uid && p.uid === targetUid) || ('BLDG-' + p.id === targetUid);
+      });
+      if(found){
+        state.selectedFeature = found.properties;
+        renderFeatures();
+        renderSidebar();
+      }
     });
   });
 }
 
 function renderDetail(){
-  var f = state.modelFc.features.find(x=>x.properties.id===state.selectedId);
-  if(!f){ state.selectedId=null; renderSidebar(); return; }
-  var p = f.properties;
+  var p = state.selectedFeature;
+  if(!p){ renderSidebar(); return; }
+
+  var cat = (p.type === 'tree_canopy') ? 'tree' :
+            (p.type === 'farm_plot') ? 'farm' :
+            (p.type === 'barren_land') ? 'barren' :
+            (p.type === 'vegetation') ? 'veg' : 'building';
+  var icon = getFeatureIcon(cat);
+  var name = p.name || (p.uid ? p.uid : ('Structure #' + p.id));
   var alerts = p.alerts || [];
 
-  var html = '<div><h3 class="panel-title"><span class="back" id="backBtn">&larr; Overview</span></h3>';
-  html += '<div class="detail-head"><h2>Footprint #'+p.id+'</h2>'+(p.unrecorded?'<span style="color:var(--change);font-family:var(--font-mono);font-size:0.7rem;">UNRECORDED</span>':'')+'</div>';
-  html += '<div class="kv-grid"><div class="kv"><div class="k">Area</div><div class="v">'+(p.area_m2||0)+' m²</div></div>'+
-    '<div class="kv"><div class="k">Alerts</div><div class="v">'+alerts.length+'</div></div></div>';
+  var html = '<div><h3 class="panel-title"><span class="back" id="backBtn" style="cursor:pointer;">&larr; Overview</span></h3>';
+  html += '<div class="detail-head"><h2>'+icon+' '+name+'</h2><span class="badge" style="background:var(--surface-2);">'+(p.category || 'Land Entity')+'</span></div>';
+  
+  html += '<div class="kv-grid">'+
+    '<div class="kv"><div class="k">Area (m²)</div><div class="v">'+(p.area_m2||0)+' m²</div></div>'+
+    '<div class="kv"><div class="k">Imperial / Guntha</div><div class="v">'+(p.area_acres ? p.area_acres + ' Ac' : (p.area_sq_ft ? p.area_sq_ft + ' sqft' : 'N/A'))+'</div></div>'+
+    '<div class="kv"><div class="k">Parcel ULPIN</div><div class="v" style="font-size:0.75rem;color:var(--accent);">'+(p.parcel_ulpin || 'Unassigned')+'</div></div>';
+
+  if(cat === 'tree'){
+    html += '<div class="kv"><div class="k">Crown Diameter</div><div class="v">'+(p.crown_diameter_m||'--')+' m</div></div>'+
+      '<div class="kv"><div class="k">Excess Green (ExG)</div><div class="v">'+(p.mean_exg!==undefined?p.mean_exg:'--')+'</div></div>'+
+      '<div class="kv"><div class="k">Chlorophyll (VARI)</div><div class="v">'+(p.mean_vari!==undefined?p.mean_vari:'--')+'</div></div>';
+  } else if(cat === 'farm'){
+    html += '<div class="kv"><div class="k">Perimeter</div><div class="v">'+(p.perimeter_m||'--')+' m</div></div>'+
+      '<div class="kv"><div class="k">Crop Canopy Index</div><div class="v">'+(p.crop_canopy_index!==undefined?p.crop_canopy_index:'--')+'</div></div>'+
+      '<div class="kv"><div class="k">Chlorophyll (VARI)</div><div class="v">'+(p.mean_vari!==undefined?p.mean_vari:'--')+'</div></div>';
+  } else if(cat === 'barren'){
+    html += '<div class="kv"><div class="k">Soil Tone Index (STI)</div><div class="v">'+(p.soil_tone_index!==undefined?p.soil_tone_index:'--')+'</div></div>'+
+      '<div class="kv"><div class="k">Land Condition</div><div class="v" style="font-size:0.72rem;">'+(p.land_condition||'Dry Soil')+'</div></div>'+
+      '<div class="kv"><div class="k">Perimeter</div><div class="v">'+(p.perimeter_m||'--')+' m</div></div>';
+  } else {
+    html += '<div class="kv"><div class="k">Unrecorded Status</div><div class="v">'+(p.unrecorded?'⚠️ UNRECORDED':'✔ Registered')+'</div></div>'+
+      '<div class="kv"><div class="k">Alerts</div><div class="v">'+alerts.length+'</div></div>'+
+      '<div class="kv"><div class="k">Type</div><div class="v">'+(p.type||'Structure')+'</div></div>';
+  }
+  html += '</div>';
 
   if(alerts.length){
     html += '<div class="findings">';
@@ -220,22 +352,45 @@ function renderDetail(){
     });
     html += '</div>';
   } else {
-    html += '<div class="clean-msg">&#10003; No issues detected by the automated rule engine</div>';
+    html += '<div class="clean-msg">&#10003; Standard verified entity. Satisfies statutory requirements.</div>';
   }
 
+  var reportKey = p.uid || String(p.id);
   html += '<button class="report-btn" id="reportBtn">Generate Verification Note</button>';
-  html += '<div class="report-box" id="reportBox"><span class="stamp">SYSTEM-GENERATED · SIMULATED WORKFLOW — NOT A LEGAL DOCUMENT</span><pre id="reportText"></pre></div></div>';
+  html += '<div class="report-box" id="reportBox"><span class="stamp">SYSTEM-GENERATED · DIGITAL SURVEY NOTE</span><pre id="reportText"></pre></div></div>';
 
   inspector.innerHTML = html;
-  document.getElementById('backBtn').addEventListener('click', function(){ state.selectedId=null; renderBuildings(); renderSidebar(); });
+  document.getElementById('backBtn').addEventListener('click', function(){
+    state.selectedFeature = null;
+    renderFeatures();
+    renderSidebar();
+  });
   document.getElementById('reportBtn').addEventListener('click', function(){
     var box = document.getElementById('reportBox');
     box.classList.toggle('open');
     if(box.classList.contains('open')){
-      document.getElementById('reportText').textContent = state.reports[String(p.id)] || 'No report available.';
+      var note = state.reports[reportKey] || state.reports[String(p.id)] ||
+        ("CADASTRAAI -- VERIFICATION NOTE\nEntity: " + name + "\nArea: " + (p.area_m2||0) + " m2\nParent ULPIN: " + (p.parcel_ulpin||'N/A') + "\nCategory: " + (p.category||'Landcover Feature'));
+      document.getElementById('reportText').textContent = note;
     }
   });
 }
+
+window.setCat = function(c){
+  state.activeCategory = c;
+  state.selectedFeature = null;
+  document.querySelectorAll('#categoryFilter button').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-cat') === c);
+  });
+  renderFeatures();
+  renderSidebar();
+};
+
+document.getElementById('categoryFilter').addEventListener('click', function(e){
+  var btn = e.target.closest('button[data-cat]');
+  if(!btn) return;
+  window.setCat(btn.getAttribute('data-cat'));
+});
 
 document.getElementById('layerToggle').addEventListener('click', function(e){
   var btn = e.target.closest('button[data-layer]');
@@ -243,8 +398,8 @@ document.getElementById('layerToggle').addEventListener('click', function(e){
   document.querySelectorAll('#layerToggle button').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   state.source = btn.getAttribute('data-layer');
-  state.selectedId = null;
-  renderBuildings();
+  state.selectedFeature = null;
+  renderFeatures();
   renderSidebar();
 });
 

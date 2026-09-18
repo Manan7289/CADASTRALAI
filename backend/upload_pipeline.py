@@ -40,7 +40,7 @@ import drone_utils
 import fetch_data
 import model
 import rules
-from ml import drone_cadastre, parcel_engine
+from ml import drone_cadastre, parcel_engine, vegetation_index
 
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 MAX_DIM = 1024  # High-res processing grid for crisp boundary detection
@@ -286,20 +286,35 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
     parcels_fc = {"type": "FeatureCollection", "features": parcels_list}
 
     # Structure compliance reports
+    # 5. Extract Discrete Landcover Entities (Trees, Farms, Barren Land, Vegetation)
+    landcover_entities = vegetation_index.extract_discrete_landcover_entities(
+        img_bgr=img_bgr,
+        px_to_lonlat_fn=px_to_lonlat,
+        meters_per_px=meters_per_px,
+        parcel_features=parcels_list
+    )
+    trees_fc = landcover_entities["trees_fc"]
+    farms_fc = landcover_entities["farms_fc"]
+    barren_fc = landcover_entities["barren_fc"]
+    vegetation_fc = landcover_entities["vegetation_fc"]
+    bunds_fc = landcover_entities["bunds_fc"]
+
+    # Structure & Landcover compliance reports
     reports = {}
     for f in buildings_fc["features"]:
         bid = f["properties"]["id"]
         area_val = f["properties"]["area_m2"]
         reports[str(bid)] = build_field_report(bid, area_val, [], f["properties"].get("parcel_ulpin", ""))
+    reports.update(landcover_entities["reports"])
 
-    # 5. Export CAD / DXF format for surveyors
+    # 6. Export CAD / DXF format for surveyors
     dxf_path = session_dir / "cadastre.dxf"
     try:
         cadastral_standards.export_cadastral_dxf(parcels_fc, buildings_fc, dxf_path)
     except Exception as e:
         print(f"[upload] DXF export error: {e}")
 
-    # 6. Save Session Artifacts
+    # 7. Save Session Artifacts
     proc_img.save(session_dir / "image.png")
     (session_dir / "meta.json").write_text(json.dumps({
         "meta": {
@@ -313,6 +328,10 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
     }), encoding="utf-8")
 
     (session_dir / "buildings.geojson").write_text(json.dumps(buildings_fc), encoding="utf-8")
+    (session_dir / "trees.geojson").write_text(json.dumps(trees_fc), encoding="utf-8")
+    (session_dir / "farms.geojson").write_text(json.dumps(farms_fc), encoding="utf-8")
+    (session_dir / "barren_land.geojson").write_text(json.dumps(barren_fc), encoding="utf-8")
+    (session_dir / "vegetation.geojson").write_text(json.dumps(vegetation_fc), encoding="utf-8")
     (session_dir / "osm_buildings.geojson").write_text(json.dumps(live_ref["buildings"]), encoding="utf-8")
     (session_dir / "parcels.geojson").write_text(json.dumps(parcels_fc), encoding="utf-8")
     (session_dir / "boundary_walls.geojson").write_text(json.dumps(walls_fc), encoding="utf-8")
@@ -325,9 +344,16 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         "extracted_walls": walls_fc,
         "extracted_roads": roads_fc,
         "extracted_bunds": bunds_fc,
-        "extracted_vegetation": veg_fc,
-        "extracted_trees": tree_fc,
+        "extracted_vegetation": vegetation_fc,
+        "extracted_trees": trees_fc,
+        "extracted_farms": farms_fc,
         "extracted_barren": barren_fc,
+        "buildings": "buildings.geojson",
+        "trees": "trees.geojson",
+        "farms": "farms.geojson",
+        "barren_land": "barren_land.geojson",
+        "vegetation": "vegetation.geojson",
+        "parcels": "parcels.geojson",
     }), encoding="utf-8")
     (session_dir / "reports.json").write_text(json.dumps(reports), encoding="utf-8")
     (session_dir / "property_cards.json").write_text(json.dumps(property_cards), encoding="utf-8")
@@ -339,19 +365,22 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
 
     (session_dir / "metrics.json").write_text(json.dumps({
         "method": "drone_cadastral_ai",
-        "note": "Extracted via AI Drone Cadastral Feature Engine: Physical Boundary Walls, Access Road Corridors, Agricultural Bunds, Vegetation & Barren Land Identification. Parcels conform to SVAMITVA / ULPIN standards.",
+        "note": "Extracted via AI Drone Cadastral Feature Engine: Physical Boundary Walls, Access Road Corridors, Agricultural Bunds, Trees, Farms, and Barren Land Identification. Parcels conform to SVAMITVA / ULPIN standards.",
         "buildings_detected": len(bldgs),
+        "trees_detected": len(trees_fc["features"]),
+        "farms_detected": len(farms_fc["features"]),
+        "barren_plots_detected": len(barren_fc["features"]),
         "parcels_delineated": len(parcels_list),
         "boundary_walls_detected": len(walls_px),
         "roads_detected": len(roads_px),
-        "agricultural_bunds_detected": len(bunds_px),
+        "agricultural_bunds_detected": len(bunds_fc["features"]),
         "survey_vegetation_cover_pct": veg_cov,
         "survey_barren_land_cover_pct": barren_cov,
         "processing_seconds": round(time.time() - t0, 2),
         "gsd_cm_px": round(meters_per_px * 100.0, 2),
     }), encoding="utf-8")
 
-    print(f"[upload] Completed session {session_id} in {time.time() - t0:.2f}s: {len(parcels_list)} parcels, {len(bldgs)} buildings, {len(walls_px)} walls")
+    print(f"[upload] Completed session {session_id} in {time.time() - t0:.2f}s: {len(parcels_list)} parcels, {len(bldgs)} buildings, {len(trees_fc['features'])} trees, {len(farms_fc['features'])} farms, {len(barren_fc['features'])} barren plots")
 
     return {
         "session_id": session_id,

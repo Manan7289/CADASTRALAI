@@ -131,24 +131,27 @@ function loadBaseLayers(map, meta, imgBlob, layers){
   }
 
   // Drone extracted vegetation & crop canopy
+  var vegGroup = L.layerGroup();
   if(layers.extracted_vegetation && layers.extracted_vegetation.features && layers.extracted_vegetation.features.length > 0){
     L.geoJSON(layers.extracted_vegetation, {
       style:{color:'#5FA37A', weight:1.2, fillOpacity:0.18, fillColor:'#5FA37A'}
-    }).addTo(refLayerGroup);
+    }).addTo(vegGroup);
   }
 
   // Drone extracted tree canopy & orchards
+  var treesGroup = L.layerGroup();
   if(layers.extracted_trees && layers.extracted_trees.features && layers.extracted_trees.features.length > 0){
     L.geoJSON(layers.extracted_trees, {
       style:{color:'#2D6A4F', weight:1.5, fillOpacity:0.25, fillColor:'#2D6A4F'}
-    }).addTo(refLayerGroup);
+    }).addTo(treesGroup);
   }
 
   // Drone extracted barren land / bare soil
+  var barrenGroup = L.layerGroup();
   if(layers.extracted_barren && layers.extracted_barren.features && layers.extracted_barren.features.length > 0){
     L.geoJSON(layers.extracted_barren, {
       style:{color:'#BFA27E', weight:1.2, fillOpacity:0.20, fillColor:'#BFA27E'}
-    }).addTo(refLayerGroup);
+    }).addTo(barrenGroup);
   }
 
   if(layers.government && layers.government.features && layers.government.features.length > 0){
@@ -167,5 +170,5 @@ function loadBaseLayers(map, meta, imgBlob, layers){
     L.geoJSON(layers.waterway, {style:{color:'#E2685F', weight:14, opacity:0.10}}).addTo(bufferGroup);
   }
 
-  return {refLayerGroup: refLayerGroup, bufferGroup: bufferGroup};
+  return {refLayerGroup: refLayerGroup, bufferGroup: bufferGroup, treesGroup: treesGroup, barrenGroup: barrenGroup, vegGroup: vegGroup};
 }

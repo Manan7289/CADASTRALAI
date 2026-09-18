@@ -26,7 +26,14 @@
       <a href="index.html?session=clear_drone_survey" id="btnDrone" style="text-decoration:none;padding:6px 11px;font-family:var(--font-mono);font-size:0.7rem;display:inline-block;">🚁 CLEAR DRONE SURVEY</a>
       <a href="index.html?legacy=1" id="btnTown" style="text-decoration:none;padding:6px 11px;font-family:var(--font-mono);font-size:0.7rem;display:inline-block;">🏙 TOWN WARD</a>
     </div>
-    <label class="toggle-field"><input type="checkbox" id="bufferToggle" checked> Buffer zones</label>
+    <div class="segmented" id="layerControlBar" style="display:flex;align-items:center;padding:2px 8px;gap:8px;">
+      <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="parcelToggle" checked> Parcels</label>
+      <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="buildingToggle" checked> 🏠 Bldgs</label>
+      <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="treeToggle" checked> 🌳 Trees</label>
+      <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="farmToggle" checked> 🌾 Farms</label>
+      <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="barrenToggle" checked> 🏜️ Barren</label>
+      <label class="toggle-field" style="cursor:pointer;font-size:0.72rem;margin:0;"><input type="checkbox" id="bufferToggle" checked> Buffers</label>
+    </div>
     <a id="dxfExportBtn" href="#" download="cadastre.dxf" class="ghost-btn" style="text-decoration:none;font-size:0.72rem;padding:6px 12px;border-radius:6px;color:var(--accent);border-color:var(--accent);">📐 Export DXF (CAD)</a>
     <div class="status-chip" id="statusChip" style="color:var(--ok);border-color:rgba(108,190,129,0.4);background:rgba(108,190,129,0.08);"><span style="width:6px;height:6px;border-radius:50%;background:var(--ok);"></span>Contiguous Cadastral Parcels · UAV Survey</div>
   </header>
@@ -47,17 +54,31 @@
 "use strict";
 
 var map = initMap();
-var state = {selectedParcelId:null, parcelsFc:null, buildingsFc:null};
-var parcelLayer;
+var state = {
+  selectedParcelId: null,
+  parcelsFc: null,
+  buildingsFc: null,
+  treesFc: null,
+  farmsFc: null,
+  barrenFc: null
+};
+var parcelLayer, buildingLayer, treeLayer, farmLayer, barrenLayer;
 
 Promise.all([
   fetch(dataUrl('meta.json')).then(r=>r.json()),
   fetch(dataUrl('image.png')).then(r=>r.blob()),
   fetch(dataUrl('layers.json')).then(r=>r.json()),
   fetch(dataUrl('parcels.geojson')).then(r=>r.json()),
-  fetch(dataUrl('buildings.geojson')).then(r=>r.json())
+  fetch(dataUrl('buildings.geojson')).then(r=>r.json()),
+  fetch(dataUrl('trees.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
+  fetch(dataUrl('farms.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]})),
+  fetch(dataUrl('barren_land.geojson')).then(r=>r.json()).catch(()=>({type:'FeatureCollection',features:[]}))
 ]).then(function(res){
-  var meta = res[0], imgBlob = res[1], layers = res[2], parcelsFc = res[3], buildingsFc = res[4];
+  var meta = res[0], imgBlob = res[1], layers = res[2];
+  var parcelsFc = res[3], buildingsFc = res[4];
+  var treesFc = res[5] || {type:'FeatureCollection',features:[]};
+  var farmsFc = res[6] || {type:'FeatureCollection',features:[]};
+  var barrenFc = res[7] || {type:'FeatureCollection',features:[]};
 
   var refs = loadBaseLayers(map, meta, imgBlob, layers);
   document.getElementById('bufferToggle').addEventListener('change', function(e){
@@ -87,13 +108,70 @@ Promise.all([
   }
   state.parcelsFc = parcelsFc;
   state.buildingsFc = buildingsFc;
+  state.treesFc = treesFc;
+  state.farmsFc = farmsFc;
+  state.barrenFc = barrenFc;
 
-  // buildings shown only as neutral context inside parcels -- not interactive here;
-  // structure-level compliance detail lives on the Compliance & Detection page.
-  L.geoJSON(buildingsFc, {
-    interactive:false,
-    style:{color:'#28352E', weight:1.2, fillColor:'#6CBE81', fillOpacity:0.75}
+  // Farm Plots Layer
+  farmLayer = L.geoJSON(farmsFc, {
+    interactive: true,
+    style: {color: '#386641', weight: 1.8, fillColor: '#8FAE5D', fillOpacity: 0.35, dashArray: '4 3'},
+    onEachFeature: function(f, layer){
+      var p = f.properties;
+      var tip = '<b>🌾 ' + (p.uid || ('Plot #' + p.id)) + '</b><br>Area: ' + (p.area_guntha || 0) + ' Guntha (' + (p.area_acres || 0) + ' Ac)<br>Canopy Index (CCI): ' + (p.crop_canopy_index || 'High');
+      layer.bindTooltip(tip, {sticky: true, direction: 'top'});
+    }
   }).addTo(map);
+
+  // Barren Land Layer
+  barrenLayer = L.geoJSON(barrenFc, {
+    interactive: true,
+    style: {color: '#7F5539', weight: 1.5, fillColor: '#BFA27E', fillOpacity: 0.40},
+    onEachFeature: function(f, layer){
+      var p = f.properties;
+      var tip = '<b>🏜️ ' + (p.uid || ('Barren #' + p.id)) + '</b><br>Area: ' + (p.area_guntha || 0) + ' Guntha (' + (p.area_m2 || 0) + ' m²)<br>Soil Tone (STI): ' + (p.spectral_sti || 'Dry Earth');
+      layer.bindTooltip(tip, {sticky: true, direction: 'top'});
+    }
+  }).addTo(map);
+
+  // Discrete Tree Canopy Layer
+  treeLayer = L.geoJSON(treesFc, {
+    interactive: true,
+    style: {color: '#1B4332', weight: 1.2, fillColor: '#2D6A4F', fillOpacity: 0.65},
+    onEachFeature: function(f, layer){
+      var p = f.properties;
+      var tip = '<b>🌳 ' + (p.uid || ('Tree #' + p.id)) + '</b><br>Crown: ' + (p.crown_area_m2 || 0) + ' m² (' + (p.crown_diameter_m || 0) + 'm dia)<br>Spectral ExG: ' + (p.spectral_exg || 0);
+      layer.bindTooltip(tip, {sticky: true, direction: 'top'});
+    }
+  }).addTo(map);
+
+  // Buildings Layer
+  buildingLayer = L.geoJSON(buildingsFc, {
+    interactive: false,
+    style: {color: '#28352E', weight: 1.2, fillColor: '#6CBE81', fillOpacity: 0.75}
+  }).addTo(map);
+
+  // Wire up layer toggles
+  document.getElementById('parcelToggle').addEventListener('change', function(e){
+    if(e.target.checked) { if(!map.hasLayer(parcelLayer)) map.addLayer(parcelLayer); }
+    else { if(map.hasLayer(parcelLayer)) map.removeLayer(parcelLayer); }
+  });
+  document.getElementById('buildingToggle').addEventListener('change', function(e){
+    if(e.target.checked) { if(!map.hasLayer(buildingLayer)) map.addLayer(buildingLayer); }
+    else { if(map.hasLayer(buildingLayer)) map.removeLayer(buildingLayer); }
+  });
+  document.getElementById('treeToggle').addEventListener('change', function(e){
+    if(e.target.checked) { if(!map.hasLayer(treeLayer)) map.addLayer(treeLayer); }
+    else { if(map.hasLayer(treeLayer)) map.removeLayer(treeLayer); }
+  });
+  document.getElementById('farmToggle').addEventListener('change', function(e){
+    if(e.target.checked) { if(!map.hasLayer(farmLayer)) map.addLayer(farmLayer); }
+    else { if(map.hasLayer(farmLayer)) map.removeLayer(farmLayer); }
+  });
+  document.getElementById('barrenToggle').addEventListener('change', function(e){
+    if(e.target.checked) { if(!map.hasLayer(barrenLayer)) map.addLayer(barrenLayer); }
+    else { if(map.hasLayer(barrenLayer)) map.removeLayer(barrenLayer); }
+  });
 
   renderParcels();
   renderSidebar();
@@ -122,7 +200,11 @@ function renderParcels(){
         renderParcels(); renderSidebar();
       });
     }
-  }).addTo(map);
+  });
+  var pToggle = document.getElementById('parcelToggle');
+  if(!pToggle || pToggle.checked) {
+    parcelLayer.addTo(map);
+  }
 }
 
 var inspector = document.getElementById('inspector');
@@ -133,14 +215,20 @@ function renderSidebar(){
   var parcels = state.parcelsFc.features;
   var landlocked = parcels.filter(f => !f.properties.road_connected);
   var unrecordedParcels = parcels.filter(f => f.properties.has_unrecorded_building);
+  var treeCount = (state.treesFc && state.treesFc.features) ? state.treesFc.features.length : 0;
+  var farmCount = (state.farmsFc && state.farmsFc.features) ? state.farmsFc.features.length : 0;
+  var barrenCount = (state.barrenFc && state.barrenFc.features) ? state.barrenFc.features.length : 0;
+  var bldgCount = (state.buildingsFc && state.buildingsFc.features) ? state.buildingsFc.features.length : 0;
   var landuseMix = {};
   parcels.forEach(function(f){ landuseMix[f.properties.landuse] = (landuseMix[f.properties.landuse]||0)+1; });
 
   var html = '';
   html += '<div><h3 class="panel-title">Ward Overview</h3><div class="stat-grid">'+
     '<div class="stat-tile"><div class="num">'+parcels.length+'</div><div class="lbl">Land parcels mapped</div></div>'+
-    '<div class="stat-tile"><div class="num">'+state.buildingsFc.features.length+'</div><div class="lbl">Buildings inside them</div></div>'+
-    '<div class="stat-tile"><div class="num" style="color:'+(landlocked.length?'var(--warning)':'var(--ok)')+'">'+landlocked.length+'</div><div class="lbl">No road frontage</div></div>'+
+    '<div class="stat-tile"><div class="num">'+bldgCount+'</div><div class="lbl">Buildings inside them</div></div>'+
+    '<div class="stat-tile"><div class="num" style="color:#2D6A4F">'+treeCount+'</div><div class="lbl">🌳 Trees identified</div></div>'+
+    '<div class="stat-tile"><div class="num" style="color:#8FAE5D">'+farmCount+'</div><div class="lbl">🌾 Farm plots delineated</div></div>'+
+    '<div class="stat-tile"><div class="num" style="color:#BFA27E">'+barrenCount+'</div><div class="lbl">🏜️ Barren land zones</div></div>'+
     '<div class="stat-tile"><div class="num" style="color:'+(unrecordedParcels.length?'var(--change)':'var(--ok)')+'">'+unrecordedParcels.length+'</div><div class="lbl">Hold unrecorded structures</div></div>'+
   '</div></div>';
 
@@ -198,6 +286,14 @@ function renderParcelDetail(){
     html += '<div class="kv"><div class="k">Built-up Plinth</div><div class="v">'+p.built_up_area_m2+' m²</div></div>'+
       '<div class="kv"><div class="k">Open Yard Space</div><div class="v">'+p.open_space_m2+' m²</div></div>'+
       '<div class="kv"><div class="k">Coverage (GCR)</div><div class="v">'+(p.ground_coverage_ratio_pct||0)+'%</div></div>';
+  }
+
+  if(p.crop_cover_pct != null || p.tree_cover_pct != null || p.barren_cover_pct != null || p.cultivable_area_acres != null){
+    var cropStr = (p.crop_cover_pct != null ? p.crop_cover_pct + '%' : '0%');
+    if(p.cultivable_area_acres) cropStr += ' (' + p.cultivable_area_acres + ' Ac)';
+    html += '<div class="kv"><div class="k">🌾 Crop Cover</div><div class="v">'+cropStr+'</div></div>'+
+      '<div class="kv"><div class="k">🌳 Tree Canopy</div><div class="v">'+(p.tree_cover_pct||0)+'%</div></div>'+
+      '<div class="kv"><div class="k">🏜️ Barren Soil</div><div class="v">'+(p.barren_cover_pct||0)+'%</div></div>';
   }
 
   var latStr = (p.gps_lat != null && typeof p.gps_lat === 'number') ? p.gps_lat.toFixed(5) : (p.gps_lat || '0.00000');

@@ -17,7 +17,7 @@ from typing import Dict, List, Tuple, Any
 
 import cv2
 import numpy as np
-from shapely.geometry import Polygon, MultiPolygon, box
+from shapely.geometry import Polygon, MultiPolygon, box, mapping, Point, shape
 from shapely.ops import unary_union
 
 
@@ -334,3 +334,348 @@ def delineate_open_rural_parcels(
                                     rural_plots.append(sub_p)
 
     return rural_plots
+
+
+def extract_discrete_landcover_entities(
+    img_bgr: np.ndarray,
+    px_to_lonlat_fn,
+    meters_per_px: float = 0.3,
+    parcel_features: List[Dict] = None
+) -> Dict[str, Any]:
+    """
+    Extract discrete, identifiable vector entities for:
+    - Trees & Orchards (trees.geojson)
+    - Agricultural Farm Plots (farms.geojson)
+    - Barren Land Plots (barren_land.geojson)
+    - Active Green Vegetation (vegetation.geojson)
+    
+    Returns standard GeoJSON FeatureCollections matching the structure of buildings.geojson,
+    with unique IDs, areas in m², sq.ft, guntha, and acres, spectral metrics, and field assessment notes.
+    """
+    h, w = img_bgr.shape[:2]
+    m_per_px = float(meters_per_px) if meters_per_px > 0 else 0.3
+    m2_per_px2 = m_per_px ** 2
+
+    # Compute spectral indices
+    indices = compute_visible_vegetation_and_soil_indices(img_bgr)
+    exg = indices["exg"]
+    vari = indices["vari"]
+    sti = indices["sti"]
+    tree_mask = indices["tree_mask"]
+    crop_mask = indices["crop_mask"]
+    barren_mask = indices["barren_mask"]
+    veg_mask = indices["veg_mask"]
+
+    # Detect bund lines to partition agricultural fields
+    bund_segments = detect_agricultural_bunds(img_bgr, crop_mask, barren_mask, meters_per_px=m_per_px)
+
+    # Helper: Find parcel ULPIN for a given polygon centroid
+    def get_parent_ulpin(centroid_pt: Point) -> str:
+        if not parcel_features:
+            return ""
+        for pf in parcel_features:
+            geom = shape(pf["geometry"])
+            if geom.contains(centroid_pt):
+                return pf["properties"].get("ulpin", "")
+        return ""
+
+    # ── 1. Discrete Tree Canopy Clusters ─────────────────────────────────────
+    min_tree_px = max(6, int(12.0 / m2_per_px2))
+    t_contours, _ = cv2.findContours(tree_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    t_valid = [c for c in t_contours if cv2.contourArea(c) >= min_tree_px]
+    t_valid.sort(key=lambda c: cv2.contourArea(c), reverse=True)
+
+    tree_features = []
+    tree_reports = {}
+    for tid, c in enumerate(t_valid, 1):
+        area_px = cv2.contourArea(c)
+        area_m2 = round(area_px * m2_per_px2, 1)
+        eps = 0.02 * cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
+        if len(approx) < 3:
+            continue
+        geo_pts = [px_to_lonlat_fn(float(x), float(y)) for x, y in approx]
+        if geo_pts[0] != geo_pts[-1]:
+            geo_pts.append(geo_pts[0])
+        poly_geo = Polygon(geo_pts)
+        if not poly_geo.is_valid:
+            poly_geo = poly_geo.buffer(0)
+        if poly_geo.is_empty or poly_geo.area <= 0:
+            continue
+
+        c_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(c_mask, [c], -1, 255, -1)
+        mean_exg = round(float(np.mean(exg[c_mask > 0])), 3)
+        mean_vari = round(float(np.mean(vari[c_mask > 0])), 3)
+        crown_diam = round(2.0 * math.sqrt(area_m2 / math.pi), 1)
+        ulpin = get_parent_ulpin(poly_geo.centroid)
+
+        props = {
+            "id": tid,
+            "uid": f"TREE-{tid:04d}",
+            "name": f"Tree Canopy #{tid}",
+            "type": "tree_canopy",
+            "category": "Tree Canopy / Orchard",
+            "area_m2": area_m2,
+            "area_sq_ft": round(area_m2 * 10.7639, 1),
+            "area_acres": round(area_m2 / 4046.86, 4),
+            "crown_diameter_m": crown_diam,
+            "mean_exg": mean_exg,
+            "mean_vari": mean_vari,
+            "health_status": "Dense Healthy Canopy" if mean_exg > 0.08 else "Moderate Green Canopy",
+            "parcel_ulpin": ulpin,
+            "alerts": [
+                {"type": "CANOPY_HEALTH", "msg": f"Photosynthetically active tree canopy (crown diameter ~{crown_diam}m, ExG={mean_exg:.2f}).", "citation": "National Agro-Forestry & Green Cover Guidelines"}
+            ]
+        }
+        tree_features.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
+        tree_reports[f"TREE-{tid:04d}"] = (
+            f"CADASTRAAI -- VEGETATION & CANOPY VERIFICATION NOTE\n"
+            f"Entity Ref: TREE-{tid:04d}\n"
+            f"Category: Tree Canopy / Orchard Cluster\n"
+            f"Parent Parcel ULPIN: {ulpin or 'N/A'}\n"
+            f"Crown Footprint Area: {area_m2} m2 ({round(area_m2/4046.86, 4)} Acres)\n"
+            f"Estimated Crown Diameter: {crown_diam} m\n"
+            f"Photosynthetic Vitality (ExG): {mean_exg:.3f} | VARI: {mean_vari:.3f}\n\n"
+            f"SURVEY ASSESSMENT:\n"
+            f"Vegetation crown identified via high-entropy texture analysis & visible chlorophyll indices.\n"
+            f"Contributes to municipal urban tree canopy and rural agro-forestry records."
+        )
+
+    # ── 2. Discrete Agricultural Farm Fields ─────────────────────────────────
+    bund_mask = np.zeros((h, w), dtype=np.uint8)
+    for seg in bund_segments:
+        cv2.line(bund_mask, (int(seg[0][0]), int(seg[0][1])), (int(seg[1][0]), int(seg[1][1])), 255, 3)
+    part_crops = cv2.bitwise_and(crop_mask, cv2.bitwise_not(bund_mask))
+    part_crops = cv2.morphologyEx(part_crops, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)))
+
+    min_farm_px = max(12, int(60.0 / m2_per_px2))
+    f_contours, _ = cv2.findContours(part_crops, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    f_valid = [c for c in f_contours if cv2.contourArea(c) >= min_farm_px]
+    f_valid.sort(key=lambda c: cv2.contourArea(c), reverse=True)
+
+    farm_features = []
+    farm_reports = {}
+    for fid, c in enumerate(f_valid, 1):
+        area_px = cv2.contourArea(c)
+        area_m2 = round(area_px * m2_per_px2, 1)
+        eps = 0.018 * cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
+        if len(approx) < 3:
+            continue
+        geo_pts = [px_to_lonlat_fn(float(x), float(y)) for x, y in approx]
+        if geo_pts[0] != geo_pts[-1]:
+            geo_pts.append(geo_pts[0])
+        poly_geo = Polygon(geo_pts)
+        if not poly_geo.is_valid:
+            poly_geo = poly_geo.buffer(0)
+        if poly_geo.is_empty or poly_geo.area <= 0:
+            continue
+
+        c_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(c_mask, [c], -1, 255, -1)
+        mean_exg = round(float(np.mean(exg[c_mask > 0])), 3)
+        mean_vari = round(float(np.mean(vari[c_mask > 0])), 3)
+        ulpin = get_parent_ulpin(poly_geo.centroid)
+
+        props = {
+            "id": fid,
+            "uid": f"FARM-{fid:04d}",
+            "name": f"Farm Field #{fid}",
+            "type": "farm_plot",
+            "category": "Agricultural / Cropland",
+            "area_m2": area_m2,
+            "area_sq_ft": round(area_m2 * 10.7639, 1),
+            "area_guntha": round(area_m2 / 101.17, 3),
+            "area_acres": round(area_m2 / 4046.86, 4),
+            "perimeter_m": round(cv2.arcLength(c, True) * m_per_px, 1),
+            "mean_exg": mean_exg,
+            "mean_vari": mean_vari,
+            "crop_canopy_index": round(float(np.count_nonzero(veg_mask[c_mask > 0])) / max(1, area_px), 2),
+            "cultivation_status": "Active Cropland / Peak Vigor" if mean_vari > 0.12 else "Cultivated Agricultural Plot",
+            "parcel_ulpin": ulpin,
+            "alerts": [
+                {"type": "CROP_VIGOR", "msg": f"Cultivated cropland verified (ExG={mean_exg:.2f}, VARI={mean_vari:.2f}).", "citation": "National Remote Sensing Cropland Classification"}
+            ]
+        }
+        farm_features.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
+        farm_reports[f"FARM-{fid:04d}"] = (
+            f"CADASTRAAI -- AGRICULTURAL CROPLAND VERIFICATION NOTE\n"
+            f"Entity Ref: FARM-{fid:04d}\n"
+            f"Category: Agricultural Farm Field / Cropland Plot\n"
+            f"Parent Parcel ULPIN: {ulpin or 'N/A'}\n"
+            f"Cultivable Area: {area_m2} m2 ({round(area_m2 / 101.17, 3)} Guntha / {round(area_m2/4046.86, 4)} Acres)\n"
+            f"Perimeter: {props['perimeter_m']} m\n"
+            f"Crop Canopy Index (CCI): {props['crop_canopy_index']:.2f}\n"
+            f"Photosynthetic Vitality (ExG): {mean_exg:.3f} | Chlorophyll (VARI): {mean_vari:.3f}\n\n"
+            f"SURVEY ASSESSMENT:\n"
+            f"Active seasonal cultivation verified via visible spectral reflectance.\n"
+            f"Parcel boundaries aligned with agricultural bund ridges and access tracks."
+        )
+
+    # ── 3. Discrete Barren Land / Fallow Earth Plots ─────────────────────────
+    part_barren = cv2.bitwise_and(barren_mask, cv2.bitwise_not(bund_mask))
+    part_barren = cv2.morphologyEx(part_barren, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)))
+
+    min_barren_px = max(10, int(50.0 / m2_per_px2))
+    b_contours, _ = cv2.findContours(part_barren, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    b_valid = [c for c in b_contours if cv2.contourArea(c) >= min_barren_px]
+    b_valid.sort(key=lambda c: cv2.contourArea(c), reverse=True)
+
+    barren_features = []
+    barren_reports = {}
+    for bid, c in enumerate(b_valid, 1):
+        area_px = cv2.contourArea(c)
+        area_m2 = round(area_px * m2_per_px2, 1)
+        eps = 0.018 * cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
+        if len(approx) < 3:
+            continue
+        geo_pts = [px_to_lonlat_fn(float(x), float(y)) for x, y in approx]
+        if geo_pts[0] != geo_pts[-1]:
+            geo_pts.append(geo_pts[0])
+        poly_geo = Polygon(geo_pts)
+        if not poly_geo.is_valid:
+            poly_geo = poly_geo.buffer(0)
+        if poly_geo.is_empty or poly_geo.area <= 0:
+            continue
+
+        c_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(c_mask, [c], -1, 255, -1)
+        mean_sti = round(float(np.mean(sti[c_mask > 0])), 3)
+        mean_exg = round(float(np.mean(exg[c_mask > 0])), 3)
+        ulpin = get_parent_ulpin(poly_geo.centroid)
+
+        props = {
+            "id": bid,
+            "uid": f"BARREN-{bid:04d}",
+            "name": f"Barren Land #{bid}",
+            "type": "barren_land",
+            "category": "Barren Land / Bare Soil",
+            "area_m2": area_m2,
+            "area_sq_ft": round(area_m2 * 10.7639, 1),
+            "area_guntha": round(area_m2 / 101.17, 3),
+            "area_acres": round(area_m2 / 4046.86, 4),
+            "perimeter_m": round(cv2.arcLength(c, True) * m_per_px, 1),
+            "soil_tone_index": mean_sti,
+            "mean_exg": mean_exg,
+            "land_condition": "Dry Bare Soil / Fallow Ground" if mean_sti > 0.18 else "Exposed Mineral Earth / Sparse Soil",
+            "parcel_ulpin": ulpin,
+            "alerts": [
+                {"type": "SOIL_EXPOSURE", "msg": f"Exposed bare ground confirmed via Soil Tone Index ({mean_sti:.2f}). No standing crops.", "citation": "Land Use / Land Cover (LULC) Classification Standards"}
+            ]
+        }
+        barren_features.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
+        barren_reports[f"BARREN-{bid:04d}"] = (
+            f"CADASTRAAI -- BARREN / FALLOW LAND VERIFICATION NOTE\n"
+            f"Entity Ref: BARREN-{bid:04d}\n"
+            f"Category: Barren Land / Fallow Earth Plot\n"
+            f"Parent Parcel ULPIN: {ulpin or 'N/A'}\n"
+            f"Barren Land Area: {area_m2} m2 ({round(area_m2 / 101.17, 3)} Guntha / {round(area_m2/4046.86, 4)} Acres)\n"
+            f"Perimeter: {props['perimeter_m']} m\n"
+            f"Soil Tone Index (STI): {mean_sti:.3f}\n"
+            f"Vegetation Residual (ExG): {mean_exg:.3f}\n\n"
+            f"SURVEY ASSESSMENT:\n"
+            f"Absence of active vegetative cover and presence of high soil spectral reflectance.\n"
+            f"Classified under revenue records as Banjar / Fallow / Open Uncultivated Land."
+        )
+
+    # ── 4. Discrete Green Vegetation Zones ───────────────────────────────────
+    min_veg_px = max(8, int(30.0 / m2_per_px2))
+    v_contours, _ = cv2.findContours(veg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    v_valid = [c for c in v_contours if cv2.contourArea(c) >= min_veg_px]
+    v_valid.sort(key=lambda c: cv2.contourArea(c), reverse=True)
+
+    veg_features = []
+    veg_reports = {}
+    for vid, c in enumerate(v_valid, 1):
+        area_px = cv2.contourArea(c)
+        area_m2 = round(area_px * m2_per_px2, 1)
+        eps = 0.02 * cv2.arcLength(c, True)
+        approx = cv2.approxPolyDP(c, eps, True).reshape(-1, 2)
+        if len(approx) < 3:
+            continue
+        geo_pts = [px_to_lonlat_fn(float(x), float(y)) for x, y in approx]
+        if geo_pts[0] != geo_pts[-1]:
+            geo_pts.append(geo_pts[0])
+        poly_geo = Polygon(geo_pts)
+        if not poly_geo.is_valid:
+            poly_geo = poly_geo.buffer(0)
+        if poly_geo.is_empty or poly_geo.area <= 0:
+            continue
+
+        c_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(c_mask, [c], -1, 255, -1)
+        mean_exg = round(float(np.mean(exg[c_mask > 0])), 3)
+        mean_vari = round(float(np.mean(vari[c_mask > 0])), 3)
+        ulpin = get_parent_ulpin(poly_geo.centroid)
+
+        props = {
+            "id": vid,
+            "uid": f"VEG-{vid:04d}",
+            "name": f"Green Vegetation #{vid}",
+            "type": "vegetation",
+            "category": "Active Green Vegetation",
+            "area_m2": area_m2,
+            "area_sq_ft": round(area_m2 * 10.7639, 1),
+            "area_acres": round(area_m2 / 4046.86, 4),
+            "mean_exg": mean_exg,
+            "mean_vari": mean_vari,
+            "parcel_ulpin": ulpin,
+            "alerts": []
+        }
+        veg_features.append({"type": "Feature", "properties": props, "geometry": mapping(poly_geo)})
+        veg_reports[f"VEG-{vid:04d}"] = (
+            f"CADASTRAAI -- VEGETATION ZONE NOTE\n"
+            f"Entity Ref: VEG-{vid:04d}\n"
+            f"Category: General Green Cover (Grassland, Lawn, Shrub)\n"
+            f"Parent Parcel ULPIN: {ulpin or 'N/A'}\n"
+            f"Area: {area_m2} m2\n"
+            f"ExG: {mean_exg:.3f} | VARI: {mean_vari:.3f}\n"
+        )
+
+    # ── 5. Agricultural Bund Feature Collection ──────────────────────────────
+    bund_features = []
+    for bid, seg in enumerate(bund_segments, 1):
+        coords = [px_to_lonlat_fn(float(seg[0][0]), float(seg[0][1])), px_to_lonlat_fn(float(seg[1][0]), float(seg[1][1]))]
+        bund_features.append({
+            "type": "Feature",
+            "properties": {"id": bid, "uid": f"BUND-{bid:04d}", "type": "agricultural_bund", "name": f"Agricultural Bund #{bid}"},
+            "geometry": {"type": "LineString", "coordinates": coords}
+        })
+
+    # Summary
+    total_m2 = round(h * w * m2_per_px2, 1)
+    tree_m2 = round(sum(f["properties"]["area_m2"] for f in tree_features), 1)
+    farm_m2 = round(sum(f["properties"]["area_m2"] for f in farm_features), 1)
+    barren_m2 = round(sum(f["properties"]["area_m2"] for f in barren_features), 1)
+    veg_m2 = round(sum(f["properties"]["area_m2"] for f in veg_features), 1)
+
+    all_reports = {}
+    all_reports.update(tree_reports)
+    all_reports.update(farm_reports)
+    all_reports.update(barren_reports)
+    all_reports.update(veg_reports)
+
+    return {
+        "trees_fc": {"type": "FeatureCollection", "features": tree_features},
+        "farms_fc": {"type": "FeatureCollection", "features": farm_features},
+        "barren_fc": {"type": "FeatureCollection", "features": barren_features},
+        "vegetation_fc": {"type": "FeatureCollection", "features": veg_features},
+        "bunds_fc": {"type": "FeatureCollection", "features": bund_features},
+        "reports": all_reports,
+        "summary": {
+            "total_survey_area_m2": total_m2,
+            "tree_canopy_count": len(tree_features),
+            "tree_canopy_area_m2": tree_m2,
+            "tree_canopy_pct": round((tree_m2 / total_m2) * 100.0, 1) if total_m2 > 0 else 0.0,
+            "farm_plots_count": len(farm_features),
+            "farm_plots_area_m2": farm_m2,
+            "farm_plots_pct": round((farm_m2 / total_m2) * 100.0, 1) if total_m2 > 0 else 0.0,
+            "barren_land_count": len(barren_features),
+            "barren_land_area_m2": barren_m2,
+            "barren_land_pct": round((barren_m2 / total_m2) * 100.0, 1) if total_m2 > 0 else 0.0,
+            "total_green_cover_m2": veg_m2,
+            "total_green_cover_pct": round((veg_m2 / total_m2) * 100.0, 1) if total_m2 > 0 else 0.0,
+        }
+    }
