@@ -206,7 +206,9 @@ landcover_entities = vegetation_index.extract_discrete_landcover_entities(
     img_bgr=img_bgr,
     px_to_lonlat_fn=px_to_lonlat,
     meters_per_px=0.3,
-    parcel_features=parcels_list
+    parcel_features=parcels_list,
+    building_features=bldg_features,
+    road_features=road_lines_geo,
 )
 trees_fc = landcover_entities["trees_fc"]
 farms_fc = landcover_entities["farms_fc"]

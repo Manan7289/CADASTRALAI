@@ -291,7 +291,9 @@ def process_upload(file_path: Path, center_lat: float, center_lon: float, width_
         img_bgr=img_bgr,
         px_to_lonlat_fn=px_to_lonlat,
         meters_per_px=meters_per_px,
-        parcel_features=parcels_list
+        parcel_features=parcels_list,
+        building_features=bldg_features,
+        road_mask=features.get("roads_mask"),
     )
     trees_fc = landcover_entities["trees_fc"]
     farms_fc = landcover_entities["farms_fc"]
