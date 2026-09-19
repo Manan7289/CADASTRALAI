@@ -5,11 +5,13 @@ UAVid building map, trained on one Gandhinagar sector. Outside that sector it fi
 (Dwarka 9, Chandigarh 4), so the app fills in the rest from land cover, more roughly.
 
 This continues training D+ from its weights on Gandhinagar + hand-labelled roofs from Jaipur,
-HSR Layout, Dwarka, Chandigarh and Singh Nagar (training/roofs_india/labels; half of every batch
-Indian), with the same crop sampler and 8-channel maps as D+. Scored before and after on
-held-out Indian crops and on the fair Gandhinagar exam, so a gain in India that costs Gandhinagar
-shows up. Inputs: roofs-v1, friend models, the D+ kernel output, the Gandhinagar mosaic kernel
-output and the dataset cadastraai-india-roofs.
+HSR Layout, Dwarka, Chandigarh and Singh Nagar (training/roofs_india/labels) + UAVPal, 4,820
+hand-drawn Bhopal drone roofs resampled to 0.3 m (prep_uavpal.py). Every batch of 4: one
+hand-labelled Indian crop, one Bhopal crop, two Gandhinagar. Same crop sampler and 8-channel maps
+as D+. Scored before and after on held-out Indian crops, the held-out east strip of Bhopal and the
+fair Gandhinagar exam, so a gain in India that costs Gandhinagar shows up. Inputs: roofs-v1,
+friend models, the D+ kernel output, the Gandhinagar mosaic and UAVPal prep kernel outputs, and
+the dataset cadastraai-india-roofs.
 """
 import glob, json, os, random, sys, time
 from pathlib import Path
@@ -23,7 +25,6 @@ cf, log, DEV = bf.cf, bf.log, bf.DEV
 
 WORK = Path("/kaggle/working")
 STEPS = int(os.environ.get("STEPS", 2000))
-INDIA_SHARE = 0.5
 
 
 def main():
@@ -31,9 +32,11 @@ def main():
     te = sorted(Path(p) for p in glob.glob("/kaggle/input/**/gn_mosaic/test/*.npz", recursive=True))
     itr = sorted(Path(p) for p in glob.glob("/kaggle/input/**/intrain_*.npz", recursive=True))
     ite = sorted(Path(p) for p in glob.glob("/kaggle/input/**/intest_*.npz", recursive=True))
+    utr = sorted(Path(p) for p in glob.glob("/kaggle/input/**/uptrain_*.npz", recursive=True))
+    ute = sorted(Path(p) for p in glob.glob("/kaggle/input/**/uptest_*.npz", recursive=True))
     d8w = glob.glob("/kaggle/input/**/maskrcnn_stacked8_dplus.pt", recursive=True)[0]
     fr = Path(glob.glob("/kaggle/input/**/unet_inria_best.pt", recursive=True)[0]).parent
-    log(f"gandhinagar train {len(tr)} test {len(te)} | india train {len(itr)} test {len(ite)} | D+ {d8w}")
+    log(f"gandhinagar train {len(tr)} test {len(te)} | india train {len(itr)} test {len(ite)} | bhopal train {len(utr)} test {len(ute)} | D+ {d8w}")
     inria, uavid = bf.load_friend(fr / "unet_inria_best.pt"), bf.load_friend(fr / "uavid_unet_best.pt")
     nets = [cf.load_unet(bf.ROOFS / f"s1_fold{k}.pt") for k in (0, 1)]
     s5 = Path("/kaggle/tmp/s5"); s5.mkdir(parents=True, exist_ok=True)
@@ -46,7 +49,7 @@ def main():
     xs = np.array([int(f.stem.split("_")[2]) for f in tr]); mid = np.median(xs)
     for f, x in zip(tr, xs):                       # out-of-fold maps, exactly as D+ was trained
         np.save(s5 / (f.stem + ".npy"), maps(np.load(f)["rgb"], [nets[1] if x < mid else nets[0]]))
-    for f in te + itr + ite:
+    for f in te + itr + ite + utr + ute:
         np.save(s5 / (f.stem + ".npy"), maps(np.load(f)["rgb"], nets))
     log("maps ready")
 
@@ -58,7 +61,7 @@ def main():
         return cf.summarise(rows)
 
     m = cf.build_maskrcnn(8); m.load_state_dict(torch.load(d8w, map_location="cpu")); m.eval()
-    before = {"india": evaluate(m, ite), "gandhinagar": evaluate(m, te)}
+    before = {"india": evaluate(m, ite), "bhopal": evaluate(m, ute), "gandhinagar": evaluate(m, te)}
     log("BEFORE", json.dumps(before))
 
     m.train()
@@ -67,7 +70,7 @@ def main():
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(STEPS, 1))
     scaler = torch.amp.GradScaler()
     for step in range(STEPS):
-        batch = [cf.sample(random.choice(itr if i < 4 * INDIA_SHARE else tr), s5, True) for i in range(4)]
+        batch = [cf.sample(random.choice(pool), s5, True) for pool in (itr, utr or itr, tr, tr)]
         imgs = [b[0].to(DEV) for b in batch]
         tgts = [{k: v.to(DEV) for k, v in b[1].items()} for b in batch]
         with torch.autocast("cuda", dtype=torch.float16):
@@ -76,11 +79,12 @@ def main():
         if step % 200 == 0:
             log(f"step {step}/{STEPS} loss {loss.item():.3f}")
     m.eval()
-    after = {"india": evaluate(m, ite), "gandhinagar": evaluate(m, te)}
+    after = {"india": evaluate(m, ite), "bhopal": evaluate(m, ute), "gandhinagar": evaluate(m, te)}
     log("AFTER", json.dumps(after))
     torch.save(m.state_dict(), WORK / "maskrcnn_stacked8_india.pt")
     (WORK / "roofs_india_metrics.json").write_text(json.dumps({"before": before, "after": after, "steps": STEPS,
-                                                               "india_train_crops": len(itr), "india_test_crops": len(ite)}, indent=2))
+                                                               "india_train_crops": len(itr), "india_test_crops": len(ite),
+                                                               "bhopal_train_crops": len(utr), "bhopal_test_crops": len(ute)}, indent=2))
     log("done")
 
 
