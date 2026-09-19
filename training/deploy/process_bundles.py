@@ -56,7 +56,7 @@ def main():
         extra = {}
         if bnet is not None:
             extra["boundary"] = (np.clip(_boundary(bnet, rgb), 0, 1) * 255).astype(np.uint8)
-            info["models"]["parcel_boundary"] = "U-Net ResNet34 trained on Dutch cadastral parcels (PDOK / Kadaster)"
+            info["models"]["parcel_boundary"] = "U-Net ResNet34: Dutch cadastral parcels + hand-labelled Indian plots"
         np.savez_compressed(out / f"{stem}.npz", rgb=rgb, valid=valid, roofs=roofs.astype(np.int32),
                             lc_probs=np.clip(lcp * 255, 0, 255).astype(np.uint8), info=json.dumps(info), **extra)
         log(info.get("name"), "| grid", rgb.shape, "| roofs", len(np.unique(roofs)) - 1)
@@ -66,7 +66,9 @@ def main():
 def _load_boundary():
     """The parcel-boundary model (training/parcel_boundary), if its kernel output is attached."""
     import segmentation_models_pytorch as smp
-    p = glob.glob("/kaggle/input/**/parcel_boundary_unet.pt", recursive=True)
+    # prefer the India fine-tune (v2), fall back to the Dutch-only v1
+    p = glob.glob("/kaggle/input/**/parcel_boundary_unet_india.pt", recursive=True) or \
+        glob.glob("/kaggle/input/**/parcel_boundary_unet.pt", recursive=True)
     if not p:
         log("no parcel-boundary model attached"); return None
     ck = torch.load(p[0], map_location="cpu", weights_only=False)

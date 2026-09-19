@@ -31,8 +31,8 @@ var CLASS_META = [
   ['low_veg', 'Low vegetation', PALETTE.grass], ['tree', 'Tree', PALETTE.tree], ['clutter', 'Other', PALETTE.paved]
 ];
 var ROAD_CLASS = {'lane': ['#FFB020', 'Lane (under 3 m)'], 'street': ['#8FE0FF', 'Street (3–8 m)'], 'main road': ['#FF5FD2', 'Main road (over 8 m)']};
-var FILL_SOURCE = 'fill';
-var ENCROACH_COLOUR = '#FF2D55';  // building footprints filled in from the land-cover model carry this in `source`
+var FILL_SOURCE = 'fill';          // building footprints filled in from the land-cover model carry this in `source`
+var ENCROACH_COLOUR = '#FF2D55';
 var ISSUE_LABEL = {
   INVALID: 'Invalid geometry', MULTIPART: 'Multipart parcel', OVERLAP: 'Overlap', DUPLICATE: 'Duplicate',
   GAP: 'Gap between parcels', SLIVER: 'Sliver', TOO_SMALL: 'Too small', HOLE: 'Encloses another area'
@@ -885,8 +885,20 @@ function exportHtml() {
     exportCard('GeoPackage (.gpkg)', 'Parcels + buildings + roads · ' + esc(state.meta.crs) + ' · QGIS / ArcGIS / PostGIS', base + 'gpkg') +
     exportCard('Shapefile (.zip)', 'Parcels + buildings + roads · ' + esc(state.meta.crs) + ' · legacy land-record systems', base + 'shp') +
     exportCard('GeoJSON', 'EPSG:4326 · web maps & APIs', base + 'geojson') +
+    '<div class="export-card"><b>Teach the parcel model</b><small>Save the approved parcels as training labels, so the next fine-tune of the parcel-boundary model learns from this survey (' + approved + ' approved)</small>' +
+    '<button class="btn" data-act="trainlabels">Save</button></div>' +
     '<div class="export-card"><b>Survey report</b><small>One printable page: parcel map, land use, roads, encroachments, topology, review, records, models and accuracy</small>' +
     '<a class="btn primary" target="_blank" href="/api/surveys/' + encodeURIComponent(state.sid) + '/report">Open</a></div>';
+}
+
+function exportWire(body) {
+  var btn = body.querySelector('[data-act="trainlabels"]');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    api('POST', '/api/surveys/' + encodeURIComponent(state.sid) + '/training-labels')
+      .then(function (r) { toast(r.approved_parcels + ' approved parcels saved as training labels (' + r.file + ').'); })
+      .catch(function (e) { toast(e.message, true); });
+  });
 }
 
 function exportCard(title, sub, href) {
@@ -935,7 +947,7 @@ function wireTab(body) {
 
 // ---------------------------------------------------------------- extension points (records.js, ...)
 var TAB_RENDERERS = {overview: overviewHtml, review: reviewHtml, issues: issuesHtml, export: exportHtml};
-var TAB_WIRERS = {};
+var TAB_WIRERS = {export: exportWire};
 window.WB = {
   state: state, map: map, esc: esc, fmt: fmt, api: api, toast: toast, zoomTo: zoomTo,
   selectParcel: selectParcel, parcelById: parcelById, restyle: restyle, renderTabs: renderTabs,

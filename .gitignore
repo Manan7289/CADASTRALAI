@@ -8,6 +8,7 @@ data/raw/tiles/
 data/raw/uploads/
 data/surveys/
 data/surveys_trash/
+data/training_labels/
 data/uploads/
 models/
 venv/
