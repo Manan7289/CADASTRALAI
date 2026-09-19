@@ -217,7 +217,7 @@ function toggleLayer(key, on) {
 
 function layerByKey() {
   return {ori: overlays.ori, classes: overlays.classes, height: overlays.height, landcover: overlays.landcover,
-          corridors: corridorLayer, parcels: parcelLayer, buildings: buildingLayer, issues: issueLayer};
+          corridors: corridorLayer, roadnet: overlays.roadnet, parcels: parcelLayer, buildings: buildingLayer, issues: issueLayer};
 }
 
 function applyLayers() {
@@ -229,7 +229,7 @@ function applyLayers() {
     else if (!state.on[k] && map.hasLayer(l)) map.removeLayer(l);
   });
   // drawing order: roads under parcels, building outlines over parcels, problems on top
-  [corridorLayer, parcelLayer, buildingLayer, issueLayer].concat(extraLayers.map(function (x) { return x.layer; }))
+  [corridorLayer, parcelLayer, overlays.roadnet, buildingLayer, issueLayer].concat(extraLayers.map(function (x) { return x.layer; }))
     .forEach(function (l) { if (l && map.hasLayer(l) && l.bringToFront) l.bringToFront(); });
   updateLabelVisibility();
   var tb = document.querySelector('.map-toolbar');
@@ -268,7 +268,7 @@ function viewCaption(id) {
   if (id === 'landcover') return '<b>3 · Land cover.</b> Every pixel classified as ' + (m.has_landcover_layer
     ? 'building, road, tree, grass, farmland, bare land, water or paved area' : 'building, road / paved, low vegetation, tree or other') +
     (topLandCover(3) ? ' — here mostly ' + topLandCover(3) : '') + '.';
-  if (id === 'parcels') return '<b>4 · Parcels.</b> ' + nP + ' numbered plots, laid out the way the area is built: in a planned colony, blocks between roads are cut into rows of plots with straight lines on the walls between houses; a walled compound stays one parcel; unplanned areas follow the houses. Colour: main land use.';
+  if (id === 'parcels') return '<b>4 · Parcels.</b> ' + nP + ' numbered plots. Each plot is the land around one house: up to the road in front, and midway to the neighbouring houses at the sides and back, where the shared wall or the side setbacks are. Roads and lanes separate plots; open ground (parks, grounds) stays one parcel. Colour: main land use.';
   if (id === 'review') return '<b>5 · Review.</b> ' + done + ' of ' + nP + ' parcels checked. The list on the right starts with the least certain ones: approve, send for a field check or reject. ' +
     (state.issues.features.length ? state.issues.features.length + ' topology problem(s) shown in red.' : 'No topology problems.');
   return '';
@@ -309,10 +309,11 @@ function layerDefs() {
     legend: '<div class="lp-grid">' + LC8.map(function (c) { return '<div>' + sw('background:' + c[2]) + esc(c[1]) + '</div>'; }).join('') + '</div>'});
   var byCls = s.road_length_by_class_m || {};
   defs.push({key: 'corridors', name: 'Roads & lanes', info: fmt(s.corridor_length_m, 0) + ' m',
-    legend: keyRows([['Paved road area', 'background:rgba(232,232,232,0.3);border:1px dashed ' + PALETTE.road]].concat(
-      state.roads && state.roads.features.length ? Object.keys(ROAD_CLASS).map(function (k) {
-        return [ROAD_CLASS[k][1], 'height:4px;border-radius:2px;background:' + ROAD_CLASS[k][0], byCls[k] != null ? fmt(byCls[k], 0) + ' m' : null];
-      }) : []))});
+    legend: keyRows([['Paved road area', 'background:rgba(232,232,232,0.3);border:1px dashed ' + PALETTE.road]])});
+  if (state.roads && state.roads.features.length) defs.push({key: 'roadnet', name: 'Road network', info: 'by width',
+    legend: keyRows(Object.keys(ROAD_CLASS).map(function (k) {
+      return [ROAD_CLASS[k][1], 'height:4px;border-radius:2px;background:' + ROAD_CLASS[k][0], byCls[k] != null ? fmt(byCls[k], 0) + ' m' : null];
+    }))});
   defs.push({key: 'parcels', name: 'Parcels', info: state.parcels.features.length, legend: parcelKey()});
   defs.push({key: 'issues', name: 'Topology problems', info: state.issues.features.length,
     legend: keyRows([['Overlap, gap, sliver…', 'background:rgba(226,104,95,0.45);border:1px dashed #E2685F']])});
@@ -392,6 +393,7 @@ function openSurvey(sid) {
     clearMap();
     state.sid = sid;
     state.meta = res[0]; state.parcels = res[1]; state.issues = res[2]; state.buildings = res[3]; state.corridors = res[4]; state.roads = res[5];
+    state.lastFixLog = null;   // the auto-fix log belongs to the survey it ran on
     state.selected = [];
     $('surveySubtitle').textContent = 'Survey Workbench · ' + state.meta.name;
 
@@ -410,16 +412,14 @@ function openSurvey(sid) {
       return {color: PALETTE.building, weight: filled ? 1.6 : 1.8, dashArray: filled ? '5 4' : null,
               fillColor: PALETTE.building, fillOpacity: 0.1};
     }});
-    // roads & lanes: the paved area, plus the centreline network coloured by width class
-    corridorLayer = L.featureGroup([
-      L.geoJSON(state.corridors, {interactive: false, pmIgnore: true,
-        style: {color: PALETTE.road, weight: 1, dashArray: '3 3', fillColor: PALETTE.road, fillOpacity: 0.2}}),
-      L.geoJSON(state.roads, {pmIgnore: true, style: function (f) {
-        return {color: (ROAD_CLASS[f.properties.class] || ROAD_CLASS.street)[0], weight: 3, opacity: 0.95};
-      }, onEachFeature: function (f, l) {
-        l.bindTooltip((ROAD_CLASS[f.properties.class] || ROAD_CLASS.street)[1].split(' (')[0] + ' · ' + f.properties.width_m + ' m wide · ' + f.properties.length_m + ' m long', {sticky: true});
-      }})
-    ]);
+    // roads & lanes: the paved area; the centreline network (width classes) is a layer of its own
+    corridorLayer = L.geoJSON(state.corridors, {interactive: false, pmIgnore: true,
+      style: {color: PALETTE.road, weight: 1, dashArray: '3 3', fillColor: PALETTE.road, fillOpacity: 0.2}});
+    overlays.roadnet = L.geoJSON(state.roads, {pmIgnore: true, style: function (f) {
+      return {color: (ROAD_CLASS[f.properties.class] || ROAD_CLASS.street)[0], weight: 3, opacity: 0.95};
+    }, onEachFeature: function (f, l) {
+      l.bindTooltip((ROAD_CLASS[f.properties.class] || ROAD_CLASS.street)[1].split(' (')[0] + ' · ' + f.properties.width_m + ' m wide · ' + f.properties.length_m + ' m long', {sticky: true});
+    }});
     overlays.buildings = buildingLayer;
     overlays.corridors = corridorLayer;
     var wantView = new URLSearchParams(location.search).get('view');

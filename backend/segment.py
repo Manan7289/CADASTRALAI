@@ -25,6 +25,14 @@ from export import utm_crs_for
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 # Two checkpoints, chosen per survey. Numbers are the held-out results they were accepted on.
 MODELS = {
+    "stack_dplus": {
+        "file": None, "kind": "kaggle", "gsd_m": 0.3,
+        "label": "Approved stack on Kaggle GPU: roofs D+ (our U-Net + Mask R-CNN + teammate Inria/UAVid) + land cover v2",
+        "summary": "The shipped models. Roofs, fair Gandhinagar exam: 88% of houses found, outline IoU 0.89. "
+                   "Land cover mIoU 0.67. Runs on Kaggle (a few minutes); the laptop only prepares and imports.",
+        "limits": "Needs internet and the team's Kaggle token. Processed at 0.3 m; a DSM, if uploaded, is still used "
+                  "for boundary edges.",
+    },
     "aerial_dsm": {
         "file": "unet_potsdam.pt",
         "label": "Aerial ORI + DSM (trained on ISPRS Potsdam)",
@@ -49,12 +57,15 @@ MODEL_PATH = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS["aerial_dsm"]
 
 
 def choose_model(key, has_height):
-    """'auto' picks the height-trained model when the survey has a DSM, the
-    land-cover model otherwise. Returns (key, path, info)."""
+    """'auto' picks the approved stack on Kaggle when Kaggle is reachable, else the land-cover
+    model on the laptop. Returns (key, path, info)."""
     if key in (None, "", "auto"):
-        key = "aerial_dsm" if has_height else "landcover_v2"
+        import kaggle_jobs
+        key = "stack_dplus" if kaggle_jobs.available() else "landcover_v2"
     if key not in MODELS:
         raise ValueError(f"Unknown model '{key}'.")
+    if MODELS[key].get("kind") == "kaggle":
+        return key, None, MODELS[key]
     path = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS[key]["file"]
     if not path.exists():
         raise ValueError(f"Model file {path.name} is missing from models/.")

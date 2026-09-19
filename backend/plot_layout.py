@@ -342,6 +342,8 @@ def _layout_block(block, roofs, edges, gsd, typ_global):
     ys = np.nonzero(rb.any(1))[0]
     if ys.size == 0:
         return np.zeros_like(roofs, np.int32), np.zeros_like(block)
+    if not (rr > 0).any():
+        return block.astype(np.int32), np.zeros_like(block)      # no building at all: one parcel (island, park)
     y0, y1 = ys[0], ys[-1] + 1
     roof_ids = [i for i in np.unique(rr) if i > 0]
     boxes = {}
@@ -588,7 +590,8 @@ def _layout_plotted(block, roofs, edges, gsd, typ_global):
 def _organic_block(block, roofs, edges, gsd):
     """Unplanned block: each house grows its plot out to the visible walls (the organic method)."""
     from parcel_extract import parcel_raster          # late import: parcel_extract imports this module
-    return parcel_raster(~block, roofs, edges, np.zeros(block.shape, np.uint8), gsd * gsd, gsd) * block
+    # open land between the buildings is not cut into invented plots: it stays one parcel
+    return parcel_raster(~block, roofs, edges, np.zeros(block.shape, np.uint8), gsd * gsd, gsd, split_open=False) * block
 
 
 def layout_parcels(corridors, inst, edges, valid, gsd):
@@ -666,3 +669,70 @@ def layout_parcels(corridors, inst, edges, valid, gsd):
     layout_parcels.last_block_kinds = kinds
     layout_parcels.last_kind_raster = kind_raster
     return lut[parcels], road & ~(parcels > 0)
+
+
+# ---------------------------------------------------------------- nearest-house parcels
+OUTBUILDING_M2 = 30          # a roof smaller than this (shed, garage, water tank) belongs to the house next to it
+SPECK_M2 = 25                # plot pieces smaller than this are absorbed (topology minimum is 12 m2)
+OPEN_REACH_M = 20            # land farther than this from every house is open land (park, ground), not a garden
+
+
+def _nearest_in_block(block, houses, gsd):
+    """Nearest-house plots inside one block, measured along the block's grid (square distance in
+    the block's own frame): boundaries between neighbouring plots come out as straight lines
+    square to the street, and open land beyond OPEN_REACH_M has straight edges too."""
+    M, (W, H) = _rot_frame(block)
+    rb = _rotate(block.astype(np.uint8), M, (W, H), True) > 0
+    rh = _rotate(houses.astype(np.float32), M, (W, H), True).astype(np.int32) * rb
+    out = np.zeros((H, W), np.int32)
+    if (rh > 0).any():
+        dist, (iy, ix) = ndi.distance_transform_cdt(rh == 0, metric="chessboard", return_indices=True)
+        out = np.where(rb & (dist * gsd <= OPEN_REACH_M), rh[iy, ix], 0)
+    back = _rotate(out.astype(np.float32), cv2.invertAffineTransform(M), block.shape[::-1], True).astype(np.int32)
+    back[~block] = 0
+    # pixels lost in the round trip, next to a plot, take the nearest plot
+    miss = block & (back == 0)
+    if miss.any() and (back > 0).any():
+        d2, (jy, jx) = ndi.distance_transform_edt(back == 0, return_indices=True)
+        fix = miss & (d2 <= 2)
+        back[fix] = back[jy[fix], jx[fix]]
+    return back
+
+
+def nearest_parcels(corridors, inst, valid, gsd):
+    """(parcel id raster, road mask). Every piece of land goes to the nearest house in its block,
+    measured along the block's grid: the boundary between neighbouring plots runs midway between
+    the houses (where the shared wall or the two side setbacks are) and square to the street, the
+    rear line midway between back-to-back houses, and the front is the road. Land farther than
+    OPEN_REACH_M from any house is open land, one parcel per piece. Roads always separate plots."""
+    land = ~corridors & valid
+    sizes = np.bincount(inst.ravel())
+    houses = np.where(sizes[inst] * gsd * gsd >= OUTBUILDING_M2, inst, 0)
+    houses[~land] = 0
+    blocks, _ = ndi.label(land)
+    parcels = np.zeros(land.shape, np.int32)
+    for b, sl in enumerate(ndi.find_objects(blocks), start=1):
+        if sl is None:
+            continue
+        block = blocks[sl] == b
+        h = np.where(block, houses[sl], 0)
+        if not (h > 0).any():
+            continue
+        plots = _nearest_in_block(block, h, gsd)
+        parcels[sl][block & (plots > 0)] = plots[block & (plots > 0)]
+    # the rest of each block (far from houses): open land, one parcel per piece
+    rest = land & (parcels == 0)
+    comps, n = ndi.label(rest)
+    if n:
+        parcels = np.where(rest, comps + int(parcels.max()), parcels)
+    # a house split by its roof detection into a main part and a sliver keeps one plot
+    parcels = _merge_split_roofs(parcels, inst, int(MERGE_MAX_ROOF_M2 / (gsd * gsd)))
+    # specks (a corner cut off by a lane) go to what surrounds them; smoothing later shaves a little
+    # off every plot, so the margin over the checker's minimum keeps finished plots above it
+    sizes = np.bincount(parcels.ravel())
+    specks = np.nonzero(sizes * gsd * gsd < SPECK_M2)[0]
+    parcels[np.isin(parcels, specks[specks > 0])] = 0
+    ids = np.unique(parcels[parcels > 0])
+    lut = np.zeros(parcels.max() + 1, np.int32)
+    lut[ids] = np.arange(1, len(ids) + 1)
+    return lut[parcels], corridors & valid

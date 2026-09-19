@@ -164,6 +164,9 @@ def get_job(job_id):
         return dict(_jobs[job_id]) if job_id in _jobs else None
 
 
+KAGGLE_STAGES = ["Reading imagery and height data", "Uploading the image to Kaggle",
+                 "Running the approved models on Kaggle GPU", "Downloading the results",
+                 "Building buildings, roads and parcels; validating topology"]
 STAGES = ["Reading imagery and height data", "Running AI segmentation", "Extracting buildings, corridors and parcels",
           "Validating topology and saving survey"]
 
@@ -178,7 +181,8 @@ def start_job(uid, name, aoi, model="auto"):
     model_key, model_path, model_info = segment.choose_model(model, "dsm" in info["files"])
     job_id = uuid.uuid4().hex[:10]
     with _lock:
-        _jobs[job_id] = {"id": job_id, "state": "running", "stage": 0, "stages": STAGES, "started": time.time(),
+        _jobs[job_id] = {"id": job_id, "state": "running", "stage": 0,
+                         "stages": KAGGLE_STAGES if model_info.get("kind") == "kaggle" else STAGES, "started": time.time(),
                          "model": model_info["label"]}
     threading.Thread(target=_run, args=(job_id, d, info, name, aoi, model_key, model_path, model_info), daemon=True).start()
     return job_id
@@ -197,6 +201,20 @@ def _run(job_id, d, info, name, aoi, model_key, model_path, model_info):
             notes.append(loaded["height_source"])
         source = f"Uploaded ORI ({info['ori']['gsd_cm']} cm native, processed at {round(gsd * 100)} cm)" + (" · " + "; ".join(notes) if notes else "")
         model_meta = {"key": model_key, "name": model_info["label"], "summary": model_info["summary"], "limits": model_info["limits"]}
+        if model_info.get("kind") == "kaggle":
+            import import_bundle
+            import kaggle_jobs
+            job = kaggle_jobs.new_job_dir(job_id)
+            kaggle_jobs.prepare(job, "upload", loaded, name or "Untitled survey", f"Uploaded ORI ({info['ori']['gsd_cm']} cm native)")
+            names = KAGGLE_STAGES
+            bundles = kaggle_jobs.run(job, stage=lambda s: _set(job_id, stage=names.index(s) if s in names else 1))
+            if not bundles:
+                raise RuntimeError("The Kaggle run finished without a result.")
+            _set(job_id, stage=len(names) - 1)
+            meta = import_bundle.import_bundle(bundles[0], loaded=loaded, name=name or "Untitled survey",
+                                               source=source + " · models run on Kaggle GPU")
+            _set(job_id, state="done", survey_id=meta["id"], seconds=round(time.time() - get_job(job_id)["started"], 1))
+            return
         if model_info.get("kind") == "landcover":
             import import_bundle
             lcp = segment.predict_landcover(loaded["rgb"], model_path)

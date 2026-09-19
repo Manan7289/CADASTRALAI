@@ -58,15 +58,17 @@ def build_survey(name, source, loaded, lcp, model_info, roofs=None):
     return meta
 
 
-def import_bundle(path):
+def import_bundle(path, loaded=None, name=None, source=None):
+    """loaded: the same grid prepared locally (keeps its height model, if the survey has one)."""
     b = np.load(path, allow_pickle=False)
     info = json.loads(str(b["info"]))
     rgb, valid, roofs = b["rgb"], b["valid"].astype(bool), b["roofs"].astype(np.int32)
     lcp = b["lc_probs"].astype(np.float32) / 255.0
-    loaded = {"rgb": rgb, "valid": valid, "transform": Affine(*info["transform"]), "crs": CRS.from_string(info["crs"]),
-              "ndsm": None, "height_source": None}
-    source = f"{info['imagery']} · processed at {info['gsd_m']} m · models run on Kaggle"
-    meta = build_survey(info["name"], source, loaded, lcp, MODEL_INFO, roofs=roofs)
+    if loaded is None:
+        loaded = {"rgb": rgb, "valid": valid, "transform": Affine(*info["transform"]), "crs": CRS.from_string(info["crs"]),
+                  "ndsm": None, "height_source": None}
+    source = source or f"{info['imagery']} · processed at {info['gsd_m']} m · models run on Kaggle"
+    meta = build_survey(name or info["name"], source, loaded, lcp, MODEL_INFO, roofs=roofs)
     s = meta["stats"]
     print(f"{info['name']}: survey {meta['id']} | {s['parcels']} parcels, {s['buildings']} buildings "
           f"({s['buildings_filled']} filled in from land cover), "
