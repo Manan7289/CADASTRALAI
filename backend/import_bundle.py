@@ -32,10 +32,12 @@ MODEL_INFO = {
 }
 
 
-def build_survey(name, source, loaded, lcp, model_info, roofs=None):
+def build_survey(name, source, loaded, lcp, model_info, roofs=None, gpu_seconds=None):
     """Survey from land cover v2 probabilities (9,H,W) and, if there is one, a roof-instance raster
     from the stacked roof model. Houses are split out of the land-cover building map where the roof
     model has none (everywhere, without a roof model). Used by bundle import and by New Survey uploads."""
+    import time
+    t0 = time.time()
     rgb, valid = loaded["rgb"], loaded["valid"]
     gsd = abs(loaded["transform"].a)
     probs5 = np.zeros((5,) + rgb.shape[:2], np.float32)
@@ -51,14 +53,18 @@ def build_survey(name, source, loaded, lcp, model_info, roofs=None):
                                        inst_override=roofs, landcover=landcover,
                                        inst_fill=filled if has_roof_model else None, paved=landcover == 3,
                                        building_source="roof model" if has_roof_model else "land cover model")
-    meta = survey.create(name, source, loaded, probs5, extracted, model_info, landcover=landcover)
+    area_km2 = float(valid.sum()) * gsd * gsd / 1e6
+    processing = {"area_km2": round(area_km2, 3), "build_seconds": round(time.time() - t0, 1)}
+    if gpu_seconds:
+        processing["model_seconds"] = round(gpu_seconds, 1)
+    meta = survey.create(name, source, loaded, probs5, extracted, model_info, landcover=landcover, processing=processing)
     # last tidy-up of hairline artefacts (specks, pinched plots) with the workbench's own auto-fix
     if json.loads((survey.survey_dir(meta["id"]) / "issues.geojson").read_text())["features"]:
         survey.auto_fix(meta["id"])
     return meta
 
 
-def import_bundle(path, loaded=None, name=None, source=None):
+def import_bundle(path, loaded=None, name=None, source=None, gpu_seconds=None):
     """loaded: the same grid prepared locally (keeps its height model, if the survey has one)."""
     b = np.load(path, allow_pickle=False)
     info = json.loads(str(b["info"]))
@@ -68,7 +74,7 @@ def import_bundle(path, loaded=None, name=None, source=None):
         loaded = {"rgb": rgb, "valid": valid, "transform": Affine(*info["transform"]), "crs": CRS.from_string(info["crs"]),
                   "ndsm": None, "height_source": None}
     source = source or f"{info['imagery']} · processed at {info['gsd_m']} m · models run on Kaggle"
-    meta = build_survey(name or info["name"], source, loaded, lcp, MODEL_INFO, roofs=roofs)
+    meta = build_survey(name or info["name"], source, loaded, lcp, MODEL_INFO, roofs=roofs, gpu_seconds=gpu_seconds)
     s = meta["stats"]
     print(f"{info['name']}: survey {meta['id']} | {s['parcels']} parcels, {s['buildings']} buildings "
           f"({s['buildings_filled']} filled in from land cover), "

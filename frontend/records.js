@@ -4,13 +4,13 @@
 "use strict";
 var WB = window.WB;
 var esc = WB.esc, fmt = WB.fmt;
-var rec = {status: null, refLayer: null, missingLayer: null, gnssLayer: null, tolerance: 1.0, busy: false};
+var rec = {status: null, refLayer: null, missingLayer: null, gnssLayer: null, encLayer: null, tolerance: 1.0, busy: false};
 
 function base() { return '/api/surveys/' + encodeURIComponent(WB.state.sid); }
 
 function clearLayers() {
   var ctl = WB.layersControl();
-  ['refLayer', 'missingLayer', 'gnssLayer'].forEach(function (k) {
+  ['refLayer', 'missingLayer', 'gnssLayer', 'encLayer'].forEach(function (k) {
     if (rec[k]) { WB.map.removeLayer(rec[k]); if (ctl) ctl.removeLayer(rec[k]); rec[k] = null; }
   });
 }
@@ -42,6 +42,14 @@ function drawLayers() {
       return {type: 'Feature', properties: {ref_id: m.ref_id}, geometry: m.geometry};
     })}, {interactive: false, pmIgnore: true, style: {color: '#FF5FD2', weight: 2.5, dashArray: '2 4', fillColor: '#FF5FD2', fillOpacity: 0.12}}).addTo(WB.map);
     if (ctl) ctl.addOverlay(rec.missingLayer, 'Record parcels missing from AI');
+  }
+  var enc = (cmp.encroachment || {}).rows || [];
+  if (enc.length) {
+    rec.encLayer = L.geoJSON({type: 'FeatureCollection', features: enc.map(function (r) {
+      return {type: 'Feature', properties: r, geometry: r.geometry};
+    })}, {pmIgnore: true, style: {color: '#FF2D55', weight: 3, fillColor: '#FF2D55', fillOpacity: 0.35},
+      onEachFeature: function (f, l) { l.bindTooltip(esc(f.properties.message), {sticky: true}); }}).addTo(WB.map);
+    if (ctl) ctl.addOverlay(rec.encLayer, 'Encroachment vs record');
   }
   var rows = (cmp.gnss || {}).rows;
   if (rows && rows.length) {
@@ -106,6 +114,21 @@ function uploadCard(kind) {
     '<button class="btn primary" type="submit">Import</button></form>';
 }
 
+function encroachResults(e) {
+  var html = '<div><h3 class="panel-title">Buildings vs record <span class="note">possible encroachments</span></h3>' +
+    '<div class="stat-grid">' + tile(e.crosses_record, 'Across a recorded boundary', e.crosses_record ? '#FF2D55' : null) +
+    tile(e.outside_record, 'Outside every recorded parcel', e.outside_record ? '#FF2D55' : null) + '</div>';
+  if (e.rows.length) {
+    html += '<div class="list" style="margin-top:10px">' + e.rows.slice(0, 60).map(function (r, i) {
+      return '<div class="row" data-enc="' + i + '"><span class="status-dot" style="background:#FF2D55"></span>' +
+        '<div><div class="pin">Building ' + esc(r.building_id) + '</div><div class="sub">' + esc(r.message) + '</div></div><div class="right">' + fmt(r.area_m2) + ' m²</div></div>';
+    }).join('') + '</div>';
+  } else {
+    html += '<div class="clean-msg">No building crosses a recorded boundary or stands outside the record.</div>';
+  }
+  return html + '<div class="note" style="margin-top:6px">Send these for a field check before the record is updated.</div></div>';
+}
+
 function parcelResults(p) {
   var c = p.counts, R = WB.RECORD;
   var html = '<div><h3 class="panel-title">AI vs existing record</h3><div class="stat-grid">' +
@@ -164,6 +187,7 @@ function render() {
     if (cmp) {
       html += '<div class="note">Last compared ' + esc(cmp.compared_at) + '. Re-run after editing parcels.</div>';
       if (cmp.parcels) html += parcelResults(cmp.parcels);
+      if (cmp.encroachment) html += encroachResults(cmp.encroachment);
       if (cmp.gnss) html += gnssResults(cmp.gnss);
     }
   }
@@ -171,6 +195,12 @@ function render() {
 }
 
 function wire(body) {
+  body.querySelectorAll('[data-enc]').forEach(function (el) {
+    el.addEventListener('click', function () {
+      var r = (((rec.status || {}).comparison || {}).encroachment || {}).rows[Number(el.dataset.enc)];
+      if (r) WB.zoomTo({type: 'Feature', geometry: r.geometry});
+    });
+  });
   body.querySelectorAll('form.rec-upload').forEach(function (form) {
     form.addEventListener('submit', function (e) {
       e.preventDefault();

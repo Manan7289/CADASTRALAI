@@ -40,6 +40,7 @@ from skimage.filters import sobel
 from topology import clean_polygon
 from road_network import WIDTH_CLASSES, bridge_lane_gaps, road_segments
 from plot_layout import KIND_LABEL, layout_parcels, nearest_parcels
+import land_use
 
 CLS = {"clutter": 0, "building": 1, "road": 2, "low_veg": 3, "tree": 4}
 # 8-class land cover (land cover v2, OpenEarthMap classes); index 0 is unused
@@ -429,6 +430,50 @@ def _parcel_landcover_label(built, shares):
             "road": "Paved / developed open land", "water": "Water"}.get(top, "Open / vacant land")
 
 
+ENCROACH_MIN_M2 = 4.0       # a building part on the road smaller than this is outline noise
+ENCROACH_MIN_DEPTH_M = 1.0  # ...and it must stick out at least this far (0.3 m imagery: 3+ pixels)
+ENCROACH_MAX_SHARE = 0.35   # above this share of the building, the road and building layers disagree (detection issue)
+
+
+def building_checks(building_polys, road_poly, inst, parcels, ndsm=None):
+    """Per building: the plot it stands on, height/storeys (with a surface model), and whether it
+    extends onto the road -- a small part on the road is a possible encroachment (PS: encroachments,
+    narrow access roads); a large part means the road and building detections disagree."""
+    out = {}
+    for bid, sl in enumerate(ndi.find_objects(inst), start=1):
+        if sl is None or bid not in building_polys:
+            continue
+        m = inst[sl] == bid
+        ids = parcels[sl][m]
+        ids = ids[ids > 0]
+        c = {"parcel": int(np.bincount(ids).argmax()) if ids.size else 0}
+        if ndsm is not None:
+            h = ndsm[sl][m]
+            h = h[np.isfinite(h)]
+            if h.size and np.median(h) > 1.5:
+                c["height_m"] = round(float(np.median(h)), 1)
+                c["storeys"] = max(1, int(round(float(np.median(h)) / 3.0)))
+        g = building_polys[bid]
+        if road_poly is not None and not g.is_empty and g.intersects(road_poly):
+            part = g.intersection(road_poly)
+            ov = part.area
+            if ov >= ENCROACH_MIN_M2:
+                if ov / max(g.area, 1e-6) > ENCROACH_MAX_SHARE:
+                    c["road_conflict"] = True
+                else:
+                    # how far it sticks out: the thin side of the part on the road
+                    pieces = [p for p in getattr(part, "geoms", [part]) if p.area > 0]
+                    big = max(pieces, key=lambda p: p.area)
+                    r = big.minimum_rotated_rectangle
+                    xs, ys = r.exterior.coords.xy
+                    sides = sorted(((xs[i + 1] - xs[i]) ** 2 + (ys[i + 1] - ys[i]) ** 2) ** 0.5 for i in range(2))
+                    if sides[0] >= ENCROACH_MIN_DEPTH_M:
+                        c["encroachment_m2"] = round(ov, 1)
+                        c["encroachment_depth_m"] = round(sides[0], 1)
+        out[bid] = c
+    return out
+
+
 def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None, inst_fill=None,
             paved=None, building_source="roof model", parcel_method="nearest"):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
@@ -485,6 +530,8 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     # coverage simplification can pinch a plot into a figure-8; keep it one valid polygon
     parcel_polys = {k: (g if g.is_valid else clean_polygon(g)) for k, g in cover_polys.items()}
     building_polys = {k: regularise_building(g) for k, g in vectorise(inst, transform).items()}
+    road_poly = shapely.union_all(list(corridor_polys.values())) if corridor_polys else None
+    bchecks = building_checks(building_polys, road_poly, inst, parcels, ndsm)
 
     # per-parcel stats straight from the rasters
     idx = np.arange(parcels.max() + 1)
@@ -504,6 +551,7 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
         kc = np.zeros((len(idx), 5))
         np.add.at(kc, (parcels.ravel(), kr.ravel()), 1)
         kind_of = kc[:, 1:].argmax(1) + 1
+    evidence = land_use.parcel_evidence(parcels, inst, corridors, corr["width"], gsd, ndsm)
     lc_counts = None
     if landcover is not None:
         lc = np.asarray(landcover, dtype=np.int64)
@@ -527,6 +575,16 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
         }
         if kind_of is not None:
             feat["layout"] = KIND_LABEL[int(kind_of[pid])]
+        lc_sh = {}
+        if lc_counts is not None:
+            tot = max(lc_counts[pid, 1:].sum(), 1)
+            lc_sh = {LANDCOVER8[k]: lc_counts[pid, k] / tot for k in LANDCOVER8}
+        use, why, extra = land_use.classify(evidence, pid, geom.area, lc_sh)
+        feat.update({"land_use": use, "land_use_reason": why, **extra})
+        enc = [c for c in bchecks.values() if c["parcel"] == pid and c.get("encroachment_m2")]
+        if enc:
+            feat["encroachment_m2"] = round(sum(c["encroachment_m2"] for c in enc), 1)
+            feat["confidence_notes"] = feat["confidence_notes"] + [f"building extends {feat['encroachment_m2']} m² onto the road (possible encroachment)"]
         if lc_counts is not None:
             tot = max(lc_counts[pid, 1:].sum(), 1)
             shares = {LANDCOVER8[k]: lc_counts[pid, k] / tot for k in LANDCOVER8}
@@ -539,7 +597,8 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     if inst_fill is not None:
         filled = set(np.unique(inst[np.asarray(inst_fill, bool) & (inst > 0)]).tolist())
     building_features = [{"id": bid, "geometry": g, "area_m2": round(g.area, 1),
-                          "source": "land cover fill-in (check)" if bid in filled else building_source}
+                          "source": "land cover fill-in (check)" if bid in filled else building_source,
+                          **{k: v for k, v in bchecks.get(bid, {}).items() if k != "parcel"}}
                          for bid, g in building_polys.items() if not g.is_empty]
     corridor_features = [{"id": 1, "geometry": g,
                           "median_width_m": corr["median_width_m"], "length_m": corr["length_m"]}
@@ -550,11 +609,14 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
         "gsd_m": gsd,
         "parcels": len(parcel_features), "buildings": len(building_features),
         "buildings_filled": len([b for b in building_features if b["id"] in filled]),
+        "encroachments": sum(1 for b in building_features if b.get("encroachment_m2")),
+        "road_building_conflicts": sum(1 for b in building_features if b.get("road_conflict")),
         "corridor_length_m": corr["length_m"], "corridor_median_width_m": corr["median_width_m"],
         "narrow_lane_length_m": corr["narrow_lane_length_m"],
         "class_fraction": {k: round(float((labels == v).mean()), 3) for k, v in CLS.items()},
         "used_height": ndsm is not None,
     }
+    stats["land_use_count"] = {u: sum(1 for f in parcel_features if f.get("land_use") == u) for u in land_use.LAND_USES}
     if landcover is not None:
         lcv = np.asarray(landcover)[valid]
         stats["land_cover_fraction"] = {name: round(float((lcv == k).mean()), 3) for k, name in LANDCOVER8.items()}

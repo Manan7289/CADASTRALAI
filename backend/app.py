@@ -95,6 +95,18 @@ def api_merge(sid):
     return jsonify({"parcels": parcels_fc, "issues": issues_fc})
 
 
+@app.route("/api/surveys/<sid>/split", methods=["POST"])
+def api_split(sid):
+    body = request.get_json(silent=True) or {}
+    try:
+        parcels_fc, issues_fc, ids = survey.split(sid, body.get("id"), body.get("line") or [])
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"parcels": parcels_fc, "issues": issues_fc, "ids": ids})
+
+
 @app.route("/api/surveys/<sid>/export")
 def api_export(sid):
     fmt = request.args.get("fmt", "gpkg")

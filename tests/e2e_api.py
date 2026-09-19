@@ -53,7 +53,21 @@ bow = {"type": "Polygon", "coordinates": [[[c.x-d, c.y-d], [c.x+d, c.y+d], [c.x+
 f4["features"].append({"type": "Feature", "properties": {"id": 99999, "status": "draft", "source": "manual"}, "geometry": bow})
 r = requests.put(f"{U}/parcels?action=e2e-bowtie", json=f4).json(); check("bow-tie parcel -> INVALID flagged", "INVALID" in types(r), types(r))
 requests.post(f"{U}/undo")
+iss = requests.get(f"{B}/surveys/{SID}/issues.geojson").json()["features"]
+check("undo returns to a clean layer", not iss, [(i["properties"]["type"], i["properties"]["message"][:50]) for i in iss])
 r = requests.put(f"{U}/parcels", json={"type": "nope"}); check("bad body rejected", r.status_code == 400)
+
+# split a parcel along a line through its middle; a line that misses is refused
+n_iss = len(requests.get(f"{B}/surveys/{SID}/issues.geojson").json()["features"])
+f5 = fc(); big = max(f5["features"], key=lambda f: shape(f["geometry"]).area if len(f["properties"].get("issues") or []) == 0 else 0)
+bg = shape(big["geometry"]); minx, miny, maxx, maxy = bg.bounds; cy = bg.centroid.y
+r = requests.post(f"{U}/split", json={"id": big["properties"]["id"], "line": [[minx - 1e-4, cy], [maxx + 1e-4, cy]]})
+check("split parcel across the middle", r.ok and len(r.json()["parcels"]["features"]) == len(f5["features"]) + 1, r.text[:100])
+check("split adds no topology issue", r.ok and len(r.json()["issues"]["features"]) <= n_iss, (n_iss, types(r.json())) if r.ok else "")
+requests.post(f"{U}/undo")
+r = requests.post(f"{U}/split", json={"id": big["properties"]["id"], "line": [[minx - 1e-3, maxy + 1e-3], [minx - 5e-4, maxy + 2e-3]]})
+check("split with a line that misses refused", r.status_code == 400, r.text[:80])
+check("parcels carry a suggested land use", all(f["properties"].get("land_use") for f in fc()["features"] if f["properties"].get("source") == "ai"))
 
 h = requests.get(f"{U}/history").json(); check("history records edits", len(h["entries"]) >= 6, len(h["entries"]))
 check("back to original count", len(fc()["features"]) == n0, len(fc()["features"]))
@@ -91,6 +105,7 @@ r = requests.post(f"{U}/reference/gnss", files={"file": ("gnss.csv", csv)}); che
 r = requests.post(f"{U}/compare", json={"tolerance_m": 1.0}); ok = r.ok
 if ok:
     j = r.json(); check("compare runs", True, json.dumps({k: (v if not isinstance(v, (list, dict)) else '…') for k, v in (j.get('parcels') or {}).items()})[:300])
+    check("compare reports buildings vs record", "encroachment" in j, list(j.keys()))
     g = (j.get("gnss") or {}); check("GNSS corner errors small", g.get("rows") and np.median([x["error_to_vertex_m"] for x in g["rows"] if x.get("is_corner")]) < 1.0,
           f"median {np.median([x['error_to_vertex_m'] for x in g['rows'] if x.get('is_corner')]):.2f} m" if g.get("rows") else g)
 else: check("compare runs", False, r.text[:200])

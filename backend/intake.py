@@ -207,12 +207,14 @@ def _run(job_id, d, info, name, aoi, model_key, model_path, model_info):
             job = kaggle_jobs.new_job_dir(job_id)
             kaggle_jobs.prepare(job, "upload", loaded, name or "Untitled survey", f"Uploaded ORI ({info['ori']['gsd_cm']} cm native)")
             names = KAGGLE_STAGES
+            t_gpu = time.time()
             bundles = kaggle_jobs.run(job, stage=lambda s: _set(job_id, stage=names.index(s) if s in names else 1))
+            t_gpu = time.time() - t_gpu
             if not bundles:
                 raise RuntimeError("The Kaggle run finished without a result.")
             _set(job_id, stage=len(names) - 1)
             meta = import_bundle.import_bundle(bundles[0], loaded=loaded, name=name or "Untitled survey",
-                                               source=source + " · models run on Kaggle GPU")
+                                               source=source + " · models run on Kaggle GPU", gpu_seconds=t_gpu)
             _set(job_id, state="done", survey_id=meta["id"], seconds=round(time.time() - get_job(job_id)["started"], 1))
             return
         if model_info.get("kind") == "landcover":

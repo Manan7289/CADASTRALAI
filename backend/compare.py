@@ -154,8 +154,46 @@ def compare(sid, tolerance_m=1.0):
             "rows": rows,
         }
 
+    if (rd / "parcels.geojson").exists() and (d / "buildings.geojson").exists():
+        result["encroachment"] = building_vs_record(_load(d / "buildings.geojson", fwd), _load(rd / "parcels.geojson", fwd), back)
+
     (reference.ref_dir(sid) / "comparison.json").write_text(json.dumps(result))
     return result
+
+
+OUTSIDE_RECORD = 0.5      # a building with more than this share outside every recorded parcel
+CROSSES_RECORD = 0.15     # a building with at least this share in a second recorded parcel
+MIN_BUILDING_ENC_M2 = 4
+
+
+def building_vs_record(buildings, ref, back):
+    """Buildings against the existing parcel record (PS: encroachments). A building that stands
+    mostly outside every recorded parcel is on unrecorded (public?) land; one that stands across a
+    recorded boundary spills into the neighbouring parcel. Both are flagged for field verification."""
+    tree = STRtree([g for _, g in ref])
+    rows = []
+    for props, g in buildings:
+        if g.is_empty or g.area < MIN_BUILDING_ENC_M2:
+            continue
+        shares = sorted(((g.intersection(ref[int(j)][1]).area, int(j)) for j in tree.query(g, predicate="intersects")),
+                        reverse=True)
+        inside = sum(a for a, _ in shares)
+        outside = max(0.0, g.area - inside)
+        row = None
+        if outside / g.area > OUTSIDE_RECORD:
+            row = {"type": "OUTSIDE_RECORD", "area_m2": round(outside, 1),
+                   "message": f"{round(outside)} m² of this building stands outside every recorded parcel"}
+        elif len(shares) >= 2 and shares[1][0] / g.area >= CROSSES_RECORD:
+            a, b = ref[shares[0][1]][0], ref[shares[1][1]][0]
+            ida, idb = a.get("ref_id", shares[0][1]), b.get("ref_id", shares[1][1])
+            row = {"type": "CROSSES_RECORD", "area_m2": round(shares[1][0], 1),
+                   "message": f"stands across the recorded boundary of {ida} and {idb}; {round(shares[1][0])} m² in {idb}"}
+        if row:
+            row.update({"building_id": props.get("id"), "geometry": mapping(shp_transform(back.transform, g))})
+            rows.append(row)
+    return {"count": len(rows),
+            "outside_record": sum(r["type"] == "OUTSIDE_RECORD" for r in rows),
+            "crosses_record": sum(r["type"] == "CROSSES_RECORD" for r in rows), "rows": rows}
 
 
 def annotate_parcels(sid, result):

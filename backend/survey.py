@@ -137,7 +137,7 @@ def _geom_to_ll(geom, transformer):
     return shp_transform(transformer.transform, geom)
 
 
-def create(name, source, loaded, probs, extracted, model_info, landcover=None):
+def create(name, source, loaded, probs, extracted, model_info, landcover=None, processing=None):
     """loaded: segment.load_survey() dict; probs: model output; extracted:
     parcel_extract.extract() output; landcover: optional 8-class land-cover raster
     on the same grid. Writes the survey folder, returns meta."""
@@ -204,7 +204,7 @@ def create(name, source, loaded, probs, extracted, model_info, landcover=None):
         "used_height": loaded.get("ndsm") is not None, "has_height_layer": (d / "height.png").exists(),
         "has_landcover_layer": (d / "landcover.png").exists(),
         "tiles": tiles,
-        "model": model_info, "stats": extracted["stats"],
+        "model": model_info, "stats": extracted["stats"], "processing": processing or {},
     }
     _write_json(d / "meta.json", meta)
     save_parcels(sid, fc(parcels), action="created by AI pipeline")
@@ -318,6 +318,49 @@ def auto_fix(sid):
         for p in fixed if not p["geometry"].is_empty]}
     parcels_fc, issues_fc = save_parcels(sid, new_fc, action=f"auto-fix: {len(log)} changes")
     return parcels_fc, issues_fc, log
+
+
+def split(sid, pid, line_lonlat):
+    """Split one parcel along a line drawn by the surveyor. The line is extended a little past both
+    ends so a line drawn to the edge still cuts through; the largest piece keeps the parcel's id."""
+    from shapely.geometry import LineString
+    from shapely.ops import split as shp_split
+    d = survey_dir(sid)
+    meta, fwd, back = _utm(sid)
+    fc = _read_json(d / "parcels.geojson")
+    target = next((f for f in fc["features"] if int(f["properties"]["id"]) == int(pid)), None)
+    if target is None:
+        raise ValueError(f"Parcel {pid} not found.")
+    if len(line_lonlat) < 2:
+        raise ValueError("Draw a line with at least two points across the parcel.")
+    poly = shp_transform(fwd.transform, shape(target["geometry"]))
+    line = shp_transform(fwd.transform, LineString(line_lonlat))
+    (x0, y0), (x1, y1) = line.coords[0], line.coords[-1]
+    pts = list(line.coords)
+    def ext(a, b, m=5.0):
+        dx, dy = a[0] - b[0], a[1] - b[1]
+        n = max((dx * dx + dy * dy) ** 0.5, 1e-9)
+        return (a[0] + dx / n * m, a[1] + dy / n * m)
+    pts = [ext(pts[0], pts[1])] + pts + [ext(pts[-1], pts[-2])]
+    pieces = [g for g in shp_split(poly, LineString(pts)).geoms if g.area > 0.5]
+    if len(pieces) < 2:
+        raise ValueError("The line does not cross the parcel from one edge to another.")
+    pieces.sort(key=lambda g: -g.area)
+    if pieces[-1].area < topology.MIN_PARCEL_M2:
+        raise ValueError(f"One of the pieces would be only {pieces[-1].area:.1f} m² -- too small to be a parcel.")
+    next_id = max(int(f["properties"]["id"]) for f in fc["features"]) + 1
+    target["geometry"] = mapping(shp_transform(back.transform, pieces[0]))
+    target["properties"].update({"status": "draft", "source": "edited"})
+    new_ids = []
+    for g in pieces[1:]:
+        props = {k: v for k, v in target["properties"].items() if k not in ("prov_pin", "issues")}
+        props.update({"id": next_id, "prov_pin": f"{sid.upper()}-{next_id:04d}", "status": "draft", "source": "edited",
+                      "confidence": None})
+        fc["features"].append({"type": "Feature", "properties": props, "geometry": mapping(shp_transform(back.transform, g))})
+        new_ids.append(next_id)
+        next_id += 1
+    parcels_fc, issues_fc = save_parcels(sid, fc, action=f"split parcel {pid} into {[int(pid)] + new_ids}")
+    return parcels_fc, issues_fc, [int(pid)] + new_ids
 
 
 def merge(sid, ids):

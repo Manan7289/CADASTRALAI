@@ -17,8 +17,9 @@ import shapely
 from pyproj import CRS
 from shapely.ops import unary_union
 
-EXPORT_FIELDS = ["parcel_id", "prov_pin", "area_m2", "perim_m", "landcover", "built_pct",
-                 "road_front", "confidence", "status", "source", "issues", "rec_status", "rec_iou", "rec_ref"]
+EXPORT_FIELDS = ["parcel_id", "prov_pin", "area_m2", "perim_m", "land_use", "lu_reason", "landcover", "built_pct",
+                 "road_front", "front_road", "n_bldg", "storeys", "encroach", "confidence", "status", "source",
+                 "issues", "rec_status", "rec_iou", "rec_ref"]
 # share of each land-cover class inside a parcel, % (short names: Shapefile fields are at most 10 characters)
 LC_FIELDS = {"building": "lc_bldg", "road": "lc_road", "paved / developed": "lc_paved", "tree": "lc_tree",
              "grass / scrub": "lc_grass", "agriculture": "lc_farm", "bare land": "lc_bare", "water": "lc_water"}
@@ -36,7 +37,8 @@ def parcels_to_gdf(parcels_fc):
     gdf["geometry"] = gdf.geometry.make_valid().map(
         lambda g: unary_union([p for p in getattr(g, "geoms", [g]) if p.geom_type in ("Polygon", "MultiPolygon")]))
     gdf = gdf[~gdf.geometry.is_empty]
-    rename = {"id": "parcel_id", "perimeter_m": "perim_m", "road_frontage": "road_front",
+    rename = {"id": "parcel_id", "perimeter_m": "perim_m", "road_frontage": "road_front", "land_use_reason": "lu_reason",
+              "frontage_road_m": "front_road", "buildings": "n_bldg", "encroachment_m2": "encroach",
               "record_status": "rec_status", "record_iou": "rec_iou", "record_ref_id": "rec_ref"}
     gdf = gdf.rename(columns=rename)
     for col in EXPORT_FIELDS:
@@ -73,7 +75,9 @@ def export(parcels_fc, fmt, buildings_fc=None, roads_fc=None, centrelines_fc=Non
     layers = {"parcels": gdf.to_crs(crs)}
     b = _layer_gdf(buildings_fc, {"id": "bldg_id"})
     if b is not None:
-        layers["buildings"] = b.to_crs(crs)[[c for c in ("bldg_id", "area_m2", "source") if c in b.columns] + ["geometry"]]
+        b = b.rename(columns={"encroachment_m2": "encroach", "encroachment_depth_m": "enc_depth", "road_conflict": "road_clash"})
+        layers["buildings"] = b.to_crs(crs)[[c for c in ("bldg_id", "area_m2", "source", "height_m", "storeys", "encroach",
+                                                         "enc_depth", "road_clash") if c in b.columns] + ["geometry"]]
     r = _layer_gdf(roads_fc, {"id": "road_id", "median_width_m": "med_width", "length_m": "length_m"})
     if r is not None:
         r = r.to_crs(crs)
