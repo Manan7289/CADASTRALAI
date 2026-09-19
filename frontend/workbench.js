@@ -168,29 +168,43 @@ function buildIssueLayer() {
 
 function restyle() { if (parcelLayer) parcelLayer.setStyle(parcelStyle); renderLegend(); }
 
+function legendKey(title, rows) {
+  return '<div class="lg-sec"><b>' + esc(title) + '</b>' + rows.map(function (r) {
+    return '<div><span class="sw" style="' + r[1] + '"></span>' + esc(r[0]) + '</div>';
+  }).join('') + '</div>';
+}
+
+// one key per visible layer, so the same colour never means two things without saying which layer it belongs to
 function renderLegend() {
-  var html = '';
-  if (state.colourMode === 'confidence') {
-    html = '<b>AI confidence</b><div class="ramp"></div><div class="ramp-lbl"><span>low</span><span>0.5</span><span>0.7</span><span>high</span></div>';
-  } else if (state.colourMode === 'record') {
-    html = '<b>Existing record</b>' + Object.keys(RECORD).map(function (k) {
-      return '<div><span class="sw" style="background:' + RECORD[k].color + '"></span>' + RECORD[k].label + '</div>';
-    }).join('') + '<div><span class="sw" style="background:#5C6B63"></span>Not compared yet</div>';
-  } else if (state.colourMode === 'landcover') {
-    html = '<b>Land cover</b>' + Object.keys(LANDCOVER).map(function (k) {
-      return '<div><span class="sw" style="background:' + LANDCOVER[k] + '"></span>' + esc(k) + '</div>';
-    }).join('');
-  } else {
-    html = '<b>Review status</b>' + Object.keys(STATUS).map(function (k) {
-      return '<div><span class="sw" style="background:' + STATUS[k].color + '"></span>' + STATUS[k].label + '</div>';
-    }).join('');
+  var html = '', on = function (l) { return l && map.hasLayer(l); };
+  if (on(parcelLayer)) {
+    if (state.colourMode === 'confidence') {
+      html += '<div class="lg-sec"><b>Parcels: AI confidence</b><div class="ramp"></div><div class="ramp-lbl"><span>low</span><span>0.5</span><span>0.7</span><span>high</span></div></div>';
+    } else if (state.colourMode === 'record') {
+      html += legendKey('Parcels: existing record', Object.keys(RECORD).map(function (k) {
+        return [RECORD[k].label, 'background:' + RECORD[k].color];
+      }).concat([['Not compared yet', 'background:#5C6B63']]));
+    } else if (state.colourMode === 'landcover') {
+      html += legendKey('Parcels: main land use', Object.keys(LANDCOVER).map(function (k) {
+        return [k, 'background:' + LANDCOVER[k]];
+      }));
+    } else {
+      html += legendKey('Parcels: review status', Object.keys(STATUS).map(function (k) {
+        return [STATUS[k].label, 'background:' + STATUS[k].color];
+      }));
+    }
   }
-  html += '<div style="margin-top:4px"><span class="sw" style="background:transparent;border:2px solid #E2685F"></span>Has topology issue</div>';
-  if (overlays.landcover && map.hasLayer(overlays.landcover)) {
-    html += '<div style="margin-top:8px"><b>Land cover layer</b>' + LC8.map(function (c) {
-      return '<div><span class="sw" style="background:' + c[1] + ';border:1px solid #555"></span>' + esc(c[0]) + '</div>';
-    }).join('') + '</div>';
-  }
+  if (on(issueLayer)) html += legendKey('Topology', [['Has topology issue', 'background:transparent;border:2px solid #E2685F']]);
+  if (on(buildingLayer)) html += legendKey('Building footprints', [
+    ['Roof model outline', 'background:transparent;border:2px solid #6E8BFF'],
+    ['Filled in from land cover (check)', 'background:transparent;border:2px dashed #F2B134']]);
+  if (on(overlays.classes)) html += legendKey('AI segmentation layer', CLASS_META.map(function (c) {
+    return [c[1], 'background:' + c[2]];
+  }));
+  if (on(overlays.landcover)) html += legendKey('Land cover layer', LC8.map(function (c) {
+    return [c[0], 'background:' + c[1] + ';border:1px solid #555'];
+  }));
+  if (!html) html = '<span style="opacity:.7">Turn on a layer to see its colours</span>';
   $('mapLegend').innerHTML = html;
 }
 
@@ -242,14 +256,18 @@ function openSurvey(sid) {
     overlays.classes = L.imageOverlay(base + 'classes.png', b, {opacity: 0.55});
     if (state.meta.has_height_layer) overlays.height = L.imageOverlay(base + 'height.png', b, {opacity: 0.6});
     if (state.meta.has_landcover_layer) overlays.landcover = L.imageOverlay(base + 'landcover.png', b, {opacity: 0.55});
-    buildingLayer = L.geoJSON(state.buildings, {interactive: false, pmIgnore: true, style: {color: '#6E8BFF', weight: 1, fillOpacity: 0.12}});
+    buildingLayer = L.geoJSON(state.buildings, {interactive: false, pmIgnore: true, style: function (f) {
+      return (f.properties.source || '').indexOf('fill') >= 0
+        ? {color: '#F2B134', weight: 1.5, dashArray: '4 3', fillOpacity: 0.1}
+        : {color: '#6E8BFF', weight: 1, fillOpacity: 0.12};
+    }});
     corridorLayer = L.geoJSON(state.corridors, {interactive: false, pmIgnore: true, style: {color: '#E7EEE9', weight: 1, dashArray: '3 3', fillColor: '#E7EEE9', fillOpacity: 0.18}});
     overlays.buildings = buildingLayer;
     overlays.corridors = corridorLayer;
     buildParcelLayer();
     buildIssueLayer();
 
-    var ctl = {'Orthoimage (ORI)': overlays.ori, 'AI segmentation': overlays.classes};
+    var ctl = {'Orthoimage (ORI)': overlays.ori, 'AI segmentation (5 classes)': overlays.classes};
     if (overlays.height) ctl['Height above ground (nDSM)'] = overlays.height;
     if (overlays.landcover) ctl['Land cover (roads, vegetation, bare land…)'] = overlays.landcover;
     ctl['Access corridors'] = corridorLayer;
@@ -492,7 +510,7 @@ function overviewHtml() {
     (m.used_height ? '<span class="tag ok">ORI + DSM/DTM</span>' : '<span class="tag warn">ORI only (no DSM)</span>') + '</div></div>';
 
   html += '<div class="stat-grid">' +
-    tile(feats.length, 'Parcels delineated') + tile(state.buildings.features.length, 'Building footprints') +
+    tile(feats.length, 'Parcels delineated') + tile(state.buildings.features.length, 'Building footprints' + (s.buildings_filled ? ' (' + s.buildings_filled + ' filled in from land cover)' : '')) +
     tile(fmt(s.corridor_length_m, 0) + ' m', 'Access corridors') + tile(fmt(s.narrow_lane_length_m, 0) + ' m', 'Narrow lanes (< 3 m)') +
     '</div>';
 

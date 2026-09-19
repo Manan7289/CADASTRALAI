@@ -13,6 +13,7 @@ from affine import Affine
 from rasterio.crs import CRS
 
 import parcel_extract
+import roof_fill
 import survey
 
 # land cover v2 (OpenEarthMap) -> the app's 5 segmentation classes
@@ -23,7 +24,8 @@ MODEL_INFO = {
     "key": "stack_dplus_landcover_v2",
     "name": "Roofs: stacked ensemble (our U-Net + Mask R-CNN, teammate Inria + UAVid maps); "
             "land cover: SegFormer-B2 (OpenEarthMap)",
-    "summary": "Roofs, fair Gandhinagar exam: 88% of houses found, 12.5% of touching pairs merged, outline IoU 0.89. "
+    "summary": "Roofs the stack misses but land cover marks as building are filled in and tagged for review. "
+               "Roofs, fair Gandhinagar exam: 88% of houses found, 12.5% of touching pairs merged, outline IoU 0.89. "
                "Land cover, OpenEarthMap validation: mIoU 0.67 (road 0.65, tree 0.71, grass 0.58, bare land 0.44).",
     "limits": "Roofs trained on one planned Indian sector plus WHU; misses some red-tile / dark roofs and very "
               "dense blocks. Land cover weakest on bare land (IoU 0.44). Satellite imagery ~0.3 m, not drone.",
@@ -43,11 +45,15 @@ def import_bundle(path):
     landcover[~valid] = 0
     loaded = {"rgb": rgb, "valid": valid, "transform": Affine(*info["transform"]), "crs": CRS.from_string(info["crs"]),
               "ndsm": None, "height_source": None}
-    extracted = parcel_extract.extract(probs5, rgb, loaded["transform"], valid=valid, inst_override=roofs, landcover=landcover)
+    # houses the roof model missed but the land-cover model sees as building
+    roofs, filled = roof_fill.fill_missed_roofs(roofs, lcp[8], valid, info["gsd_m"])
+    extracted = parcel_extract.extract(probs5, rgb, loaded["transform"], valid=valid, inst_override=roofs,
+                                       landcover=landcover, inst_fill=filled)
     source = f"{info['imagery']} · processed at {info['gsd_m']} m · models run on Kaggle"
     meta = survey.create(info["name"], source, loaded, probs5, extracted, MODEL_INFO, landcover=landcover)
     s = meta["stats"]
-    print(f"{info['name']}: survey {meta['id']} | {s['parcels']} parcels, {s['buildings']} buildings, "
+    print(f"{info['name']}: survey {meta['id']} | {s['parcels']} parcels, {s['buildings']} buildings "
+          f"({s['buildings_filled']} filled in from land cover), "
           f"{s['corridor_length_m']} m corridors | land cover {s.get('land_cover_fraction')}")
     return meta
 
