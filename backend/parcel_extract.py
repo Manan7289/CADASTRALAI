@@ -38,7 +38,8 @@ from skimage.segmentation import watershed
 from skimage.filters import sobel
 
 from topology import clean_polygon
-from road_network import WIDTH_CLASSES, road_segments
+from road_network import WIDTH_CLASSES, bridge_lane_gaps, road_segments
+from plot_layout import KIND_LABEL, layout_parcels
 
 CLS = {"clutter": 0, "building": 1, "road": 2, "low_veg": 3, "tree": 4}
 # 8-class land cover (land cover v2, OpenEarthMap classes); index 0 is unused
@@ -429,7 +430,7 @@ def _parcel_landcover_label(built, shares):
 
 
 def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None, inst_fill=None,
-            paved=None, building_source="roof model"):
+            paved=None, building_source="roof model", parcel_method="layout"):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
     geometries) plus summary stats.
@@ -449,10 +450,17 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     edges = edge_strength(rgb, ndsm)
     corridors = corridor_mask(labels, px_m2, gsd, paved)
     inst = building_instances(labels, edges, gsd, px_m2) if inst_override is None else instances_from_raster(inst_override, px_m2)
-    parcels = parcel_raster(corridors, inst, edges, labels, px_m2, gsd)
+    if parcel_method == "layout":
+        # blocks are only right if the lane network is closed: bridge gaps under trees / vehicles
+        corridors, _ = bridge_lane_gaps(corridors, ndi.binary_dilation(inst > 0, iterations=2), gsd)
 
     # only nodata connected to the image edge is outside the survey; black pixels inside it (deep shadow) are not
     valid = np.ones(labels.shape, bool) if valid is None else ndi.binary_fill_holes(valid)
+    if parcel_method == "layout":
+        # blocks from the road network -> rows -> one plot per house, cut along wall lines (plot_layout.py)
+        parcels, corridors = layout_parcels(corridors, inst, edges, valid, gsd)
+    else:
+        parcels = parcel_raster(corridors, inst, edges, labels, px_m2, gsd)
     corridor_id = int(parcels.max()) + 1
     cover = np.where(corridors, corridor_id, parcels).astype(np.int32)
     # mask nodata (e.g. the warp border) BEFORE merging, since masking can split a parcel into pieces
@@ -487,6 +495,12 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     touches_corr = ndi.binary_dilation(corridors, iterations=max(1, int(1.0 / gsd)))
     frontage = np.bincount(parcels[touches_corr & (parcels > 0)], minlength=len(idx)) > 0
 
+    kind_of = None
+    if parcel_method == "layout" and getattr(layout_parcels, "last_kind_raster", None) is not None:
+        kr = layout_parcels.last_kind_raster
+        kc = np.zeros((len(idx), 5))
+        np.add.at(kc, (parcels.ravel(), kr.ravel()), 1)
+        kind_of = kc[:, 1:].argmax(1) + 1
     lc_counts = None
     if landcover is not None:
         lc = np.asarray(landcover, dtype=np.int64)
@@ -508,6 +522,8 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
             "built_pct": round(float(100 * built), 1), "veg_pct": round(float(100 * veg), 1), "landcover": cover,
             "road_frontage": bool(frontage[pid]), "confidence": confidence, "confidence_notes": reasons,
         }
+        if kind_of is not None:
+            feat["layout"] = KIND_LABEL[int(kind_of[pid])]
         if lc_counts is not None:
             tot = max(lc_counts[pid, 1:].sum(), 1)
             shares = {LANDCOVER8[k]: lc_counts[pid, k] / tot for k in LANDCOVER8}
