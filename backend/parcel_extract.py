@@ -475,7 +475,7 @@ def building_checks(building_polys, road_poly, inst, parcels, ndsm=None):
 
 
 def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None, inst_fill=None,
-            paved=None, building_source="roof model", parcel_method="nearest"):
+            paved=None, building_source="roof model", parcel_method="nearest", boundary=None):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
     geometries) plus summary stats.
@@ -503,7 +503,7 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     valid = np.ones(labels.shape, bool) if valid is None else ndi.binary_fill_holes(valid)
     if parcel_method == "nearest":
         # every piece of land to the nearest house in its block; roads separate (plot_layout.py)
-        parcels, corridors = nearest_parcels(corridors, inst, valid, gsd)
+        parcels, corridors = nearest_parcels(corridors, inst, valid, gsd, boundary)
     elif parcel_method == "layout":
         # blocks from the road network -> rows -> one plot per house, cut along wall lines (plot_layout.py)
         parcels, corridors = layout_parcels(corridors, inst, edges, valid, gsd)

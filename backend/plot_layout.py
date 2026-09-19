@@ -677,7 +677,12 @@ SPECK_M2 = 25                # plot pieces smaller than this are absorbed (topol
 OPEN_REACH_M = 20            # land farther than this from every house is open land (park, ground), not a garden
 
 
-def _nearest_in_block(block, houses, gsd):
+BOUNDARY_WEIGHT = 1.0        # boundary-model ridge height (probability 0..1) ...
+DISTANCE_WEIGHT = 0.03       # ... against 0.03 per metre of distance from the house: a detected wall wins
+                             # within ~30 m; with no wall in sight the cut falls midway between houses
+
+
+def _nearest_in_block(block, houses, gsd, boundary=None):
     """Nearest-house plots inside one block, measured along the block's grid (square distance in
     the block's own frame): boundaries between neighbouring plots come out as straight lines
     square to the street, and open land beyond OPEN_REACH_M has straight edges too."""
@@ -687,7 +692,15 @@ def _nearest_in_block(block, houses, gsd):
     out = np.zeros((H, W), np.int32)
     if (rh > 0).any():
         dist, (iy, ix) = ndi.distance_transform_cdt(rh == 0, metric="chessboard", return_indices=True)
-        out = np.where(rb & (dist * gsd <= OPEN_REACH_M), rh[iy, ix], 0)
+        reach = rb & (dist * gsd <= OPEN_REACH_M)
+        if boundary is None:
+            out = np.where(reach, rh[iy, ix], 0)
+        else:
+            # grow plots from the houses over the boundary map: a plot stops at a detected wall / fence
+            from skimage.segmentation import watershed
+            rbd = _rotate(boundary.astype(np.float32), M, (W, H), False)
+            elev = BOUNDARY_WEIGHT * rbd + DISTANCE_WEIGHT * dist * gsd
+            out = watershed(elev, markers=rh, mask=reach)
     back = _rotate(out.astype(np.float32), cv2.invertAffineTransform(M), block.shape[::-1], True).astype(np.int32)
     back[~block] = 0
     # pixels lost in the round trip, next to a plot, take the nearest plot
@@ -699,7 +712,7 @@ def _nearest_in_block(block, houses, gsd):
     return back
 
 
-def nearest_parcels(corridors, inst, valid, gsd):
+def nearest_parcels(corridors, inst, valid, gsd, boundary=None):
     """(parcel id raster, road mask). Every piece of land goes to the nearest house in its block,
     measured along the block's grid: the boundary between neighbouring plots runs midway between
     the houses (where the shared wall or the two side setbacks are) and square to the street, the
@@ -718,7 +731,7 @@ def nearest_parcels(corridors, inst, valid, gsd):
         h = np.where(block, houses[sl], 0)
         if not (h > 0).any():
             continue
-        plots = _nearest_in_block(block, h, gsd)
+        plots = _nearest_in_block(block, h, gsd, None if boundary is None else boundary[sl])
         parcels[sl][block & (plots > 0)] = plots[block & (plots > 0)]
     # the rest of each block (far from houses): open land, one parcel per piece
     rest = land & (parcels == 0)

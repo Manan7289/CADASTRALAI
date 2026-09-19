@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 JOBS_DIR = ROOT / "data" / "kaggle_jobs"
 GSD_M = 0.3
 MODEL_DATASETS = ["cadastraai-friend-models", "cadastraai-roofs-v1"]
-MODEL_KERNELS = ["cadastraai-friend-bakeoff", "cadastraai-landcover-v2-segformer"]
+MODEL_KERNELS = ["cadastraai-friend-bakeoff", "cadastraai-landcover-v2-segformer", "cadastraai-parcel-boundary"]
 SOURCES = {"bakeoff_friend.py": ROOT / "training/ensemble/bakeoff_friend.py",
            "demo_bundles.py": ROOT / "training/deploy/demo_bundles.py",
            "process_bundles.py": ROOT / "training/deploy/process_bundles.py"}

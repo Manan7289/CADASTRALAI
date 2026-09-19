@@ -35,6 +35,7 @@ def main():
     nets = [cf.load_unet(bf.ROOFS / f"s1_fold{k}.pt") for k in (0, 1)]
     d8 = cf.build_maskrcnn(8); d8.load_state_dict(torch.load(d8w, map_location="cpu")); d8.eval()
     lc = db.load_landcover()
+    bnet = _load_boundary()
     out = WORK / "bundles"; out.mkdir(exist_ok=True)
     tmp = Path("/kaggle/tmp/p"); tmp.mkdir(parents=True, exist_ok=True)
     for path in jobs:
@@ -52,10 +53,44 @@ def main():
         lcp = db.lc_probs(lc, rgb) if min(rgb.shape[:2]) >= 512 else _lc_small(lc, rgb)
         info["models"] = {"roofs": "D+ stack: U-Net (roofs v1 folds) + teammate Inria/UAVid maps -> 8-ch Mask R-CNN",
                           "land_cover": "SegFormer-B2, OpenEarthMap (land cover v2)"}
+        extra = {}
+        if bnet is not None:
+            extra["boundary"] = (np.clip(_boundary(bnet, rgb), 0, 1) * 255).astype(np.uint8)
+            info["models"]["parcel_boundary"] = "U-Net ResNet34 trained on Dutch cadastral parcels (PDOK / Kadaster)"
         np.savez_compressed(out / f"{stem}.npz", rgb=rgb, valid=valid, roofs=roofs.astype(np.int32),
-                            lc_probs=np.clip(lcp * 255, 0, 255).astype(np.uint8), info=json.dumps(info))
+                            lc_probs=np.clip(lcp * 255, 0, 255).astype(np.uint8), info=json.dumps(info), **extra)
         log(info.get("name"), "| grid", rgb.shape, "| roofs", len(np.unique(roofs)) - 1)
     log("done")
+
+
+def _load_boundary():
+    """The parcel-boundary model (training/parcel_boundary), if its kernel output is attached."""
+    import segmentation_models_pytorch as smp
+    p = glob.glob("/kaggle/input/**/parcel_boundary_unet.pt", recursive=True)
+    if not p:
+        log("no parcel-boundary model attached"); return None
+    ck = torch.load(p[0], map_location="cpu", weights_only=False)
+    net = smp.Unet("resnet34", encoder_weights=None, in_channels=3, classes=1)
+    net.load_state_dict(ck["state_dict"])
+    log("parcel boundary:", p[0])
+    return net.to(bf.DEV).eval()
+
+
+@torch.no_grad()
+def _boundary(net, rgb, tile=512, stride=384):
+    mean, std = np.array([0.485, 0.456, 0.406], np.float32), np.array([0.229, 0.224, 0.225], np.float32)
+    h, w = rgb.shape[:2]
+    im = np.pad(rgb, ((0, max(0, tile - h)), (0, max(0, tile - w)), (0, 0)), mode="reflect")
+    H, W = im.shape[:2]
+    x = torch.from_numpy(((im.astype(np.float32) / 255 - mean) / std).transpose(2, 0, 1)[None]).to(bf.DEV)
+    acc = torch.zeros((H, W), device=bf.DEV); cnt = torch.zeros((H, W), device=bf.DEV)
+    ys = sorted(set(list(range(0, H - tile + 1, stride)) + [H - tile])); xs = sorted(set(list(range(0, W - tile + 1, stride)) + [W - tile]))
+    for y in ys:
+        for xx in xs:
+            with torch.autocast("cuda", dtype=torch.float16):
+                o = torch.sigmoid(net(x[:, :, y:y + tile, xx:xx + tile]).float())[0, 0]
+            acc[y:y + tile, xx:xx + tile] += o; cnt[y:y + tile, xx:xx + tile] += 1
+    return (acc / cnt)[:h, :w].cpu().numpy()
 
 
 def _lc_small(net, rgb):

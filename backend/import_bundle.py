@@ -32,7 +32,7 @@ MODEL_INFO = {
 }
 
 
-def build_survey(name, source, loaded, lcp, model_info, roofs=None, gpu_seconds=None):
+def build_survey(name, source, loaded, lcp, model_info, roofs=None, gpu_seconds=None, boundary=None):
     """Survey from land cover v2 probabilities (9,H,W) and, if there is one, a roof-instance raster
     from the stacked roof model. Houses are split out of the land-cover building map where the roof
     model has none (everywhere, without a roof model). Used by bundle import and by New Survey uploads."""
@@ -52,7 +52,8 @@ def build_survey(name, source, loaded, lcp, model_info, roofs=None, gpu_seconds=
     extracted = parcel_extract.extract(probs5, rgb, loaded["transform"], ndsm=loaded.get("ndsm"), valid=valid,
                                        inst_override=roofs, landcover=landcover,
                                        inst_fill=filled if has_roof_model else None, paved=landcover == 3,
-                                       building_source="roof model" if has_roof_model else "land cover model")
+                                       building_source="roof model" if has_roof_model else "land cover model",
+                                       boundary=boundary)
     area_km2 = float(valid.sum()) * gsd * gsd / 1e6
     processing = {"area_km2": round(area_km2, 3), "build_seconds": round(time.time() - t0, 1)}
     if gpu_seconds:
@@ -74,7 +75,9 @@ def import_bundle(path, loaded=None, name=None, source=None, gpu_seconds=None):
         loaded = {"rgb": rgb, "valid": valid, "transform": Affine(*info["transform"]), "crs": CRS.from_string(info["crs"]),
                   "ndsm": None, "height_source": None}
     source = source or f"{info['imagery']} · processed at {info['gsd_m']} m · models run on Kaggle"
-    meta = build_survey(name or info["name"], source, loaded, lcp, MODEL_INFO, roofs=roofs, gpu_seconds=gpu_seconds)
+    boundary = b["boundary"].astype(np.float32) / 255.0 if "boundary" in b.files else None
+    meta = build_survey(name or info["name"], source, loaded, lcp, MODEL_INFO, roofs=roofs, gpu_seconds=gpu_seconds,
+                        boundary=boundary)
     s = meta["stats"]
     print(f"{info['name']}: survey {meta['id']} | {s['parcels']} parcels, {s['buildings']} buildings "
           f"({s['buildings_filled']} filled in from land cover), "
