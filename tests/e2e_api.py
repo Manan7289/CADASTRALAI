@@ -35,8 +35,9 @@ r = requests.post(f"{U}/autofix").json(); check("auto-fix clears overlap", not r
 
 # merge two touching parcels, then a non-touching pair
 feats = fc()["features"]; geoms = [shape(f["geometry"]) for f in feats]
+# a pair that shares a real edge (about 3 m or more), not just a corner
 pair = next((feats[i]["properties"]["id"], feats[j]["properties"]["id"]) for i in range(len(feats)) for j in range(i+1, len(feats))
-            if geoms[i].intersection(geoms[j]).length > 1e-5)
+            if geoms[i].boundary.intersection(geoms[j].boundary).length > 3e-5)
 r = requests.post(f"{U}/merge", json={"ids": list(pair)}); check("merge touching pair", r.ok and len(r.json()["parcels"]["features"]) == len(feats) - 1, r.status_code)
 far = (feats[0]["properties"]["id"], feats[-1]["properties"]["id"])
 r = requests.post(f"{U}/merge", json={"ids": list(far)}); check("merge far pair refused", r.status_code == 400, r.text[:80])

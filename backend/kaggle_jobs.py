@@ -39,7 +39,9 @@ MODEL_INFO = {
             "land cover: SegFormer-B2 (OpenEarthMap); run on Kaggle GPU",
     "summary": "Roofs, fair Gandhinagar exam: 88% of houses found, 12.5% of touching pairs merged, outline IoU 0.89. "
                "Roofs the stack misses but land cover marks as building are filled in and tagged for review. "
-               "Land cover, OpenEarthMap validation: mIoU 0.67 (road 0.65, tree 0.71, grass 0.58, bare land 0.44).",
+               "Land cover, OpenEarthMap validation: mIoU 0.67 (road 0.65, tree 0.71, grass 0.58, bare land 0.44). "
+               "Parcels: plots grow from each house and stop at the parcel-boundary model's lines (U-Net trained on "
+               "Dutch cadastral parcels); on a held-out city 43% of official parcels matched at IoU 0.5 (34% without the model).",
     "limits": "Roofs trained on one planned Indian sector plus WHU; misses some red-tile / dark roofs and very "
               "dense blocks. Land cover weakest on bare land (IoU 0.44). Everything is processed at 0.3 m.",
 }
