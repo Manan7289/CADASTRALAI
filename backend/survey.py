@@ -146,6 +146,7 @@ def create(name, source, loaded, probs, extracted, model_info, landcover=None):
     d.mkdir(parents=True, exist_ok=True)
     crs, transform, valid = loaded["crs"], loaded["transform"], loaded["valid"]
     to_ll = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    to_utm = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
 
     alpha = (valid * 255).astype(np.uint8)
     ori, bounds = _to_display(np.dstack([loaded["rgb"], alpha]), crs, transform, Resampling.average)
@@ -181,7 +182,12 @@ def create(name, source, loaded, probs, extracted, model_info, landcover=None):
     for i, p in enumerate(sorted(extracted["parcels"], key=lambda p: (-p["geometry"].centroid.y, p["geometry"].centroid.x)), 1):
         props = {k: v for k, v in p.items() if k != "geometry"}
         props.update({"id": i, "prov_pin": f"{sid.upper()}-{i:04d}", "status": "draft", "issues": [], "source": "ai"})
-        parcels.append({"type": "Feature", "properties": props, "geometry": mapping(_geom_to_ll(p["geometry"], to_ll))})
+        ll = _geom_to_ll(p["geometry"], to_ll)
+        # reprojection can turn a near-degenerate vertex into a self-intersection; check the round trip
+        back_utm = _geom_to_ll(ll, to_utm)
+        if not back_utm.is_valid:
+            ll = _geom_to_ll(topology.clean_polygon(back_utm), to_ll)
+        parcels.append({"type": "Feature", "properties": props, "geometry": mapping(ll)})
     buildings = [{"type": "Feature", "properties": {k: v for k, v in b.items() if k != "geometry"},
                   "geometry": mapping(_geom_to_ll(b["geometry"], to_ll))} for b in extracted["buildings"]]
     corridors = [{"type": "Feature", "properties": {k: v for k, v in c.items() if k != "geometry"},

@@ -48,9 +48,13 @@ def import_bundle(path):
     # houses the roof model missed but the land-cover model sees as building
     roofs, filled = roof_fill.fill_missed_roofs(roofs, lcp[8], valid, info["gsd_m"])
     extracted = parcel_extract.extract(probs5, rgb, loaded["transform"], valid=valid, inst_override=roofs,
-                                       landcover=landcover, inst_fill=filled)
+                                       landcover=landcover, inst_fill=filled,
+                                       paved=landcover == 3)
     source = f"{info['imagery']} · processed at {info['gsd_m']} m · models run on Kaggle"
     meta = survey.create(info["name"], source, loaded, probs5, extracted, MODEL_INFO, landcover=landcover)
+    # last tidy-up of hairline artefacts (specks, pinched plots) with the workbench's own auto-fix
+    if json.loads((survey.survey_dir(meta["id"]) / "issues.geojson").read_text())["features"]:
+        survey.auto_fix(meta["id"])
     s = meta["stats"]
     print(f"{info['name']}: survey {meta['id']} | {s['parcels']} parcels, {s['buildings']} buildings "
           f"({s['buildings_filled']} filled in from land cover), "

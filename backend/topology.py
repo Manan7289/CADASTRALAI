@@ -116,7 +116,8 @@ def validate(parcels, exclude=None):
     union = unary_union(valid)
     for poly in _polygons(union):
         for ring in poly.interiors:
-            hole = Polygon(ring)
+            # parcels sitting inside the hole (a plot ringed by a lane) are not part of the gap
+            hole = Polygon(ring).difference(union)
             if exclude is not None:
                 hole = hole.difference(exclude)
             if GAP_TOL_M2 < hole.area <= MAX_GAP_M2:
@@ -257,9 +258,10 @@ def auto_fix(parcels, exclude=None):
 
     # enclosed gaps -> best neighbour
     tree = STRtree([p["geometry"] for p in work])
-    for poly in _polygons(unary_union([p["geometry"] for p in work])):
+    covered = unary_union([p["geometry"] for p in work])
+    for poly in _polygons(covered):
         for ring in poly.interiors:
-            hole = Polygon(ring)
+            hole = Polygon(ring).difference(covered)  # plots ringed by a lane are not gap
             if exclude is not None:
                 hole = hole.difference(exclude)
             if hole.geom_type != "Polygon" or not (GAP_TOL_M2 < hole.area <= MAX_GAP_M2):
