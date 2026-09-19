@@ -32,29 +32,41 @@ MODEL_INFO = {
 }
 
 
-def import_bundle(path):
-    b = np.load(path, allow_pickle=False)
-    info = json.loads(str(b["info"]))
-    rgb, valid, roofs = b["rgb"], b["valid"].astype(bool), b["roofs"].astype(np.int32)
-    lcp = b["lc_probs"].astype(np.float32) / 255.0
+def build_survey(name, source, loaded, lcp, model_info, roofs=None):
+    """Survey from land cover v2 probabilities (9,H,W) and, if there is one, a roof-instance raster
+    from the stacked roof model. Houses are split out of the land-cover building map where the roof
+    model has none (everywhere, without a roof model). Used by bundle import and by New Survey uploads."""
+    rgb, valid = loaded["rgb"], loaded["valid"]
+    gsd = abs(loaded["transform"].a)
     probs5 = np.zeros((5,) + rgb.shape[:2], np.float32)
     for k, a in LC_TO_APP.items():
         probs5[a] += lcp[k]
     probs5 /= np.clip(probs5.sum(0, keepdims=True), 1e-6, None)
     landcover = (lcp[1:].argmax(0) + 1).astype(np.uint8)
     landcover[~valid] = 0
-    loaded = {"rgb": rgb, "valid": valid, "transform": Affine(*info["transform"]), "crs": CRS.from_string(info["crs"]),
-              "ndsm": None, "height_source": None}
-    # houses the roof model missed but the land-cover model sees as building
-    roofs, filled = roof_fill.fill_missed_roofs(roofs, lcp[8], valid, info["gsd_m"])
-    extracted = parcel_extract.extract(probs5, rgb, loaded["transform"], valid=valid, inst_override=roofs,
-                                       landcover=landcover, inst_fill=filled,
-                                       paved=landcover == 3)
-    source = f"{info['imagery']} · processed at {info['gsd_m']} m · models run on Kaggle"
-    meta = survey.create(info["name"], source, loaded, probs5, extracted, MODEL_INFO, landcover=landcover)
+    has_roof_model = roofs is not None
+    roofs = np.zeros(rgb.shape[:2], np.int32) if roofs is None else roofs
+    roofs, filled = roof_fill.fill_missed_roofs(roofs, lcp[8], valid, gsd)
+    extracted = parcel_extract.extract(probs5, rgb, loaded["transform"], ndsm=loaded.get("ndsm"), valid=valid,
+                                       inst_override=roofs, landcover=landcover,
+                                       inst_fill=filled if has_roof_model else None, paved=landcover == 3,
+                                       building_source="roof model" if has_roof_model else "land cover model")
+    meta = survey.create(name, source, loaded, probs5, extracted, model_info, landcover=landcover)
     # last tidy-up of hairline artefacts (specks, pinched plots) with the workbench's own auto-fix
     if json.loads((survey.survey_dir(meta["id"]) / "issues.geojson").read_text())["features"]:
         survey.auto_fix(meta["id"])
+    return meta
+
+
+def import_bundle(path):
+    b = np.load(path, allow_pickle=False)
+    info = json.loads(str(b["info"]))
+    rgb, valid, roofs = b["rgb"], b["valid"].astype(bool), b["roofs"].astype(np.int32)
+    lcp = b["lc_probs"].astype(np.float32) / 255.0
+    loaded = {"rgb": rgb, "valid": valid, "transform": Affine(*info["transform"]), "crs": CRS.from_string(info["crs"]),
+              "ndsm": None, "height_source": None}
+    source = f"{info['imagery']} · processed at {info['gsd_m']} m · models run on Kaggle"
+    meta = build_survey(info["name"], source, loaded, lcp, MODEL_INFO, roofs=roofs)
     s = meta["stats"]
     print(f"{info['name']}: survey {meta['id']} | {s['parcels']} parcels, {s['buildings']} buildings "
           f"({s['buildings_filled']} filled in from land cover), "

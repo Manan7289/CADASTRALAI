@@ -38,6 +38,7 @@ from skimage.segmentation import watershed
 from skimage.filters import sobel
 
 from topology import clean_polygon
+from road_network import WIDTH_CLASSES, road_segments
 
 CLS = {"clutter": 0, "building": 1, "road": 2, "low_veg": 3, "tree": 4}
 # 8-class land cover (land cover v2, OpenEarthMap classes); index 0 is unused
@@ -428,7 +429,7 @@ def _parcel_landcover_label(built, shares):
 
 
 def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None, inst_fill=None,
-            paved=None):
+            paved=None, building_source="roof model"):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
     geometries) plus summary stats.
@@ -519,16 +520,17 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     if inst_fill is not None:
         filled = set(np.unique(inst[np.asarray(inst_fill, bool) & (inst > 0)]).tolist())
     building_features = [{"id": bid, "geometry": g, "area_m2": round(g.area, 1),
-                          "source": "land cover fill-in (check)" if bid in filled else "roof model"}
+                          "source": "land cover fill-in (check)" if bid in filled else building_source}
                          for bid, g in building_polys.items() if not g.is_empty]
     corridor_features = [{"id": 1, "geometry": g,
                           "median_width_m": corr["median_width_m"], "length_m": corr["length_m"]}
                          for g in corridor_polys.values() if not g.is_empty]
+    road_lines = road_segments(corr["skeleton"], corr["width"], transform, gsd)
 
     stats = {
         "gsd_m": gsd,
         "parcels": len(parcel_features), "buildings": len(building_features),
-        "buildings_filled": sum(b["source"] != "roof model" for b in building_features),
+        "buildings_filled": len([b for b in building_features if b["id"] in filled]),
         "corridor_length_m": corr["length_m"], "corridor_median_width_m": corr["median_width_m"],
         "narrow_lane_length_m": corr["narrow_lane_length_m"],
         "class_fraction": {k: round(float((labels == v).mean()), 3) for k, v in CLS.items()},
@@ -537,6 +539,8 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     if landcover is not None:
         lcv = np.asarray(landcover)[valid]
         stats["land_cover_fraction"] = {name: round(float((lcv == k).mean()), 3) for k, name in LANDCOVER8.items()}
+    stats["road_length_by_class_m"] = {c: round(sum(r["length_m"] for r in road_lines if r["class"] == c), 1)
+                                       for _, c in WIDTH_CLASSES}
     return {"parcels": parcel_features, "buildings": building_features, "corridors": corridor_features,
-            "stats": stats, "rasters": {"labels": labels, "parcels": parcels, "corridors": corridors,
+            "roads": road_lines, "stats": stats, "rasters": {"labels": labels, "parcels": parcels, "corridors": corridors,
                                         "buildings": inst, "edges": edges, "skeleton": corr["skeleton"]}}
