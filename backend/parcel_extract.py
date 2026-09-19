@@ -390,7 +390,7 @@ def _parcel_landcover_label(built, shares):
             "road": "Paved / developed open land", "water": "Water"}.get(top, "Open / vacant land")
 
 
-def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None):
+def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None, inst_fill=None):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
     geometries) plus summary stats.
@@ -398,7 +398,9 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     inst_override: optional (H,W) roof-instance raster from a dedicated roof model;
     used instead of splitting the segmentation's building class.
     landcover: optional (H,W) 8-class land-cover raster (LANDCOVER8); adds a
-    per-parcel land-cover breakdown and finer parcel land-use labels."""
+    per-parcel land-cover breakdown and finer parcel land-use labels.
+    inst_fill: optional (H,W) bool mask of houses in inst_override that were filled in
+    from the land-cover building map (roof_fill.py); those footprints are tagged for review."""
     gsd = abs(transform.a)
     px_m2 = _px_area(transform)
     labels = probs.argmax(0).astype(np.uint8)
@@ -471,7 +473,11 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
             feat["veg_pct"] = round(100 * (shares["tree"] + shares["grass / scrub"] + shares["agriculture"]), 1)
         parcel_features.append(feat)
 
-    building_features = [{"id": bid, "geometry": g, "area_m2": round(g.area, 1)}
+    filled = set()
+    if inst_fill is not None:
+        filled = set(np.unique(inst[np.asarray(inst_fill, bool) & (inst > 0)]).tolist())
+    building_features = [{"id": bid, "geometry": g, "area_m2": round(g.area, 1),
+                          "source": "land cover fill-in (check)" if bid in filled else "roof model"}
                          for bid, g in building_polys.items() if not g.is_empty]
     corridor_features = [{"id": 1, "geometry": g,
                           "median_width_m": corr["median_width_m"], "length_m": corr["length_m"]}
@@ -480,6 +486,7 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     stats = {
         "gsd_m": gsd,
         "parcels": len(parcel_features), "buildings": len(building_features),
+        "buildings_filled": sum(b["source"] != "roof model" for b in building_features),
         "corridor_length_m": corr["length_m"], "corridor_median_width_m": corr["median_width_m"],
         "narrow_lane_length_m": corr["narrow_lane_length_m"],
         "class_fraction": {k: round(float((labels == v).mean()), 3) for k, v in CLS.items()},
