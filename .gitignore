@@ -11,4 +11,5 @@ data/surveys_trash/
 data/training_labels/
 data/uploads/
 models/
+training/ensemble_v2/build/
 venv/
