@@ -41,6 +41,10 @@ FRONT_STRAIGHTEN_M = 2.5    # a plot front is a straight line; land up to this f
 FRONT_TAKE_MAX_M = 1.0      # ...and it may step at most this far into the road (never the lane's middle)
 VERGE_MAX_DEPTH_M = 8       # a house-less strip thinner than this is a road median / verge, not a plot
 OPEN_STRIP_MAX_DEPTH_M = 20  # a house-less block thinner than this (green median, road reserve) stays one parcel
+# L / T shaped blocks are split at their inner corners into rectangular parts
+RECT_OK = 0.8                # a block filling this share of its bounding rectangle is laid out as it is
+MIN_DEFECT_M = 6             # an inner corner at least this deep is a place to split
+MIN_PART_M2 = 400
 # block types (how a surveyor would treat the block)
 KIND_CODE = {"plotted": 1, "campus": 2, "sparse": 3, "organic": 4}
 KIND_LABEL = {1: "Plotted colony (plots in rows)", 2: "Walled compound (one parcel)",
@@ -499,6 +503,88 @@ def _merge_split_roofs(parcels, inst, max_roof_px):
     return lut[parcels]
 
 
+def _rectangularity(mask):
+    cs, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cs:
+        return 1.0
+    (_, _), (w, h), _ = cv2.minAreaRect(np.vstack(cs))
+    return mask.sum() / max(w * h, 1)
+
+
+def split_rectangular(block, gsd, depth=0):
+    """Split an L / T / U shaped block at its deepest inner corner, straight along one of the
+    block's grid directions, choosing the cut that leaves the most rectangular parts; repeat on
+    the parts. Returns a label raster of parts (1..n) on the block crop."""
+    if depth > 4 or _rectangularity(block) >= RECT_OK or block.sum() * gsd * gsd < 2 * MIN_PART_M2:
+        return block.astype(np.int32)
+    cs, _ = cv2.findContours(block.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    c = max(cs, key=cv2.contourArea)
+    hull = cv2.convexHull(c, returnPoints=False)
+    try:
+        defects = cv2.convexityDefects(c, hull)
+    except cv2.error:
+        defects = None
+    if defects is None:
+        return block.astype(np.int32)
+    ang = np.deg2rad(_block_angle(block))
+    dirs = [(np.cos(ang), np.sin(ang)), (-np.sin(ang), np.cos(ang))]
+    best, best_score = None, _rectangularity(block)
+    for s_, e_, f_, d_ in sorted(defects.reshape(-1, 4), key=lambda d: -d[3])[:4]:
+        if d_ / 256.0 * gsd < MIN_DEFECT_M:
+            continue
+        px, py = c[f_][0]
+        for dx, dy in dirs:
+            L = max(block.shape) * 2
+            line = np.zeros(block.shape, np.uint8)
+            cv2.line(line, (int(px - dx * L), int(py - dy * L)), (int(px + dx * L), int(py + dy * L)), 1, 2)
+            parts, n = ndi.label(block & ~line.astype(bool))
+            if n < 2:
+                continue
+            sizes = np.bincount(parts.ravel())[1:] * gsd * gsd
+            big = [i + 1 for i, a in enumerate(sizes) if a >= MIN_PART_M2]
+            if len(big) < 2:
+                continue
+            score = np.average([_rectangularity(parts == i) for i in big], weights=[sizes[i - 1] for i in big])
+            if score > best_score + 0.05:
+                best, best_score = (parts, big), score
+    if best is None:
+        return block.astype(np.int32)
+    parts, big = best
+    # small crumbs and the cut line itself go to the nearest big part
+    lab = np.zeros(block.shape, np.int32)
+    for k, i in enumerate(big, start=1):
+        lab[parts == i] = k
+    miss = block & (lab == 0)
+    if miss.any():
+        _, (iy, ix) = ndi.distance_transform_edt(lab == 0, return_indices=True)
+        lab[miss] = lab[iy[miss], ix[miss]]
+    out = np.zeros(block.shape, np.int32)
+    n = 0
+    for k in range(1, len(big) + 1):
+        sub = split_rectangular(lab == k, gsd, depth + 1)
+        out[sub > 0] = sub[sub > 0] + n
+        n += int(sub.max())
+    return out
+
+
+def _layout_plotted(block, roofs, edges, gsd, typ_global):
+    """Plotted colony block: split into rectangular parts first, each laid out in its own direction."""
+    parts = split_rectangular(block, gsd)
+    if parts.max() <= 1:
+        return _layout_block(block, roofs, edges, gsd, typ_global)
+    plots = np.zeros(block.shape, np.int32)
+    verge = np.zeros_like(block)
+    n = 0
+    for k in range(1, parts.max() + 1):
+        part = parts == k
+        p, v = _layout_block(part, np.where(part, roofs, 0), edges, gsd, typ_global)
+        take = (p > 0) & (plots == 0) & (part | ~block)
+        plots[take] = p[take] + n
+        verge |= v
+        n = int(plots.max())
+    return plots, verge & ~(plots > 0)
+
+
 def _organic_block(block, roofs, edges, gsd):
     """Unplanned block: each house grows its plot out to the visible walls (the organic method)."""
     from parcel_extract import parcel_raster          # late import: parcel_extract imports this module
@@ -560,7 +646,7 @@ def layout_parcels(corridors, inst, edges, valid, gsd):
         elif kind in ("organic", "sparse"):
             plots, verge = _organic_block(block, roofs, edges[sl], gsd), np.zeros_like(block)
         else:
-            plots, verge = _layout_block(block, roofs, edges[sl], gsd, typ_global)
+            plots, verge = _layout_plotted(block, roofs, edges[sl], gsd, typ_global)
         plots = np.where(plots > 0, plots + next_id, 0)
         # a plot takes road pixels only where no other block's plot already sits
         take = (plots > 0) & (block | ((parcels[sl] == 0) & may_take[sl] & valid[sl]))
