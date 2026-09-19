@@ -268,7 +268,7 @@ function viewCaption(id) {
   if (id === 'landcover') return '<b>3 · Land cover.</b> Every pixel classified as ' + (m.has_landcover_layer
     ? 'building, road, tree, grass, farmland, bare land, water or paved area' : 'building, road / paved, low vegetation, tree or other') +
     (topLandCover(3) ? ' — here mostly ' + topLandCover(3) : '') + '.';
-  if (id === 'parcels') return '<b>4 · Parcels.</b> ' + nP + ' numbered plots. Each house with its wall, courtyard and open land around it is one parcel; roads and lanes (white) separate them. Colour: main land use.';
+  if (id === 'parcels') return '<b>4 · Parcels.</b> ' + nP + ' numbered plots, laid out the way the area is built: in a planned colony, blocks between roads are cut into rows of plots with straight lines on the walls between houses; a walled compound stays one parcel; unplanned areas follow the houses. Colour: main land use.';
   if (id === 'review') return '<b>5 · Review.</b> ' + done + ' of ' + nP + ' parcels checked. The list on the right starts with the least certain ones: approve, send for a field check or reject. ' +
     (state.issues.features.length ? state.issues.features.length + ' topology problem(s) shown in red.' : 'No topology problems.');
   return '';
@@ -754,6 +754,7 @@ function parcelDetailHtml(f) {
     kv('Area', fmt(p.area_m2) + ' m²') + kv('Perimeter', fmt(p.perimeter_m) + ' m') +
     kv('Land cover', p.landcover || '—') + kv('Built-up', p.built_pct == null ? '—' : fmt(p.built_pct, 0) + '%') +
     kv('Road frontage', p.road_frontage == null ? '—' : (p.road_frontage ? 'Yes' : 'No — check access')) +
+    (p.layout ? kv('Laid out as', p.layout) : '') +
     kv('Vegetation', p.veg_pct == null ? '—' : fmt(p.veg_pct, 0) + '%') +
     '</div>' + landCoverBreakdown(p) +
     '<div style="margin-top:12px"><div class="class-row" style="grid-template-columns:110px 1fr 44px"><span>AI confidence</span>' +
