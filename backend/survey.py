@@ -235,7 +235,8 @@ def _snapshot(d, action):
         return
     hist = d / "history"
     hist.mkdir(exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{uuid.uuid4().hex[:4]}"
+    # nanosecond stamp: two saves in the same second must still sort in the order they happened
+    stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 10**9:09d}"
     (hist / f"{stamp}.geojson").write_bytes(src.read_bytes())
     (hist / f"{stamp}.json").write_text(json.dumps({"before": action}))
     snaps = sorted(hist.glob("*.geojson"))

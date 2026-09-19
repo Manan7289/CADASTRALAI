@@ -1,0 +1,22 @@
+{
+  "nearest house": {
+    "tiles": 8,
+    "private_parcels": 800,
+    "mean_iou": 0.371,
+    "matched_iou50_pct": 34.0,
+    "matched_iou75_pct": 2.0,
+    "boundary_precision_1m": 0.281,
+    "boundary_recall_1m": 0.332,
+    "boundary_f_1m": 0.304
+  },
+  "nearest house + boundary model": {
+    "tiles": 8,
+    "private_parcels": 800,
+    "mean_iou": 0.412,
+    "matched_iou50_pct": 43.1,
+    "matched_iou75_pct": 3.8,
+    "boundary_precision_1m": 0.296,
+    "boundary_recall_1m": 0.356,
+    "boundary_f_1m": 0.323
+  }
+}
