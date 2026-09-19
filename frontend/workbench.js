@@ -12,6 +12,11 @@ var STATUS = {
 // a colour means the same thing wherever it appears.
 var PALETTE = {building: '#FF6B4A', road: '#E8E8E8', paved: '#969696', tree: '#2E8B3E', grass: '#8FD16A',
                agriculture: '#C9D65B', bare: '#C8955A', water: '#3A86FF', open: '#D8C9A3'};
+// suggested land use per parcel (backend land_use.py)
+var LANDUSE = {
+  'Residential': '#F2C14E', 'Residential - apartments': '#E8913A', 'Commercial / mixed use': '#D1495B',
+  'Institutional / large complex': '#8F7CF6', 'Vacant plot': '#C8955A', 'Open space / green': '#8FD16A', 'Water body': '#3A86FF'
+};
 var LANDCOVER = {
   'Built-up': PALETTE.building, 'Vegetated open land': PALETTE.grass, 'Open / vacant land': PALETTE.open,
   'Barren land': PALETTE.bare, 'Paved / developed open land': PALETTE.paved, 'Water': PALETTE.water
@@ -26,7 +31,8 @@ var CLASS_META = [
   ['low_veg', 'Low vegetation', PALETTE.grass], ['tree', 'Tree', PALETTE.tree], ['clutter', 'Other', PALETTE.paved]
 ];
 var ROAD_CLASS = {'lane': ['#FFB020', 'Lane (under 3 m)'], 'street': ['#8FE0FF', 'Street (3–8 m)'], 'main road': ['#FF5FD2', 'Main road (over 8 m)']};
-var FILL_SOURCE = 'fill';  // building footprints filled in from the land-cover model carry this in `source`
+var FILL_SOURCE = 'fill';
+var ENCROACH_COLOUR = '#FF2D55';  // building footprints filled in from the land-cover model carry this in `source`
 var ISSUE_LABEL = {
   INVALID: 'Invalid geometry', MULTIPART: 'Multipart parcel', OVERLAP: 'Overlap', DUPLICATE: 'Duplicate',
   GAP: 'Gap between parcels', SLIVER: 'Sliver', TOO_SMALL: 'Too small', HOLE: 'Encloses another area'
@@ -42,7 +48,7 @@ var RECORD = {
 var state = {
   surveys: [], sid: null, meta: null,
   parcels: null, issues: null, buildings: null, corridors: null,
-  selected: [], tab: 'overview', colourMode: 'landcover', tool: 'select',
+  selected: [], tab: 'overview', colourMode: 'landuse', tool: 'select',
   reviewFilter: 'draft', editingLayer: null,
   view: 'parcels', on: {}  // on: which layer keys should be on the map
 };
@@ -123,6 +129,7 @@ function parcelStyle(f) {
   var fill;
   if (state.colourMode === 'confidence') fill = confColour(p.confidence);
   else if (state.colourMode === 'landcover') fill = LANDCOVER[p.landcover] || '#5C6B63';
+  else if (state.colourMode === 'landuse') fill = LANDUSE[p.land_use] || LANDCOVER[p.landcover] || '#5C6B63';
   else if (state.colourMode === 'record') fill = RECORD[p.record_status] ? RECORD[p.record_status].color : '#5C6B63';
   else fill = STATUS[p.status] ? STATUS[p.status].color : '#9FB3A8';
   var hasIssue = p.issues && p.issues.length;
@@ -189,7 +196,7 @@ var VIEWS = [
   {id: 'image', label: 'Image', layers: ['ori']},
   {id: 'buildings', label: 'Buildings', layers: ['ori', 'buildings']},
   {id: 'landcover', label: 'Land cover', layers: ['ori', 'LC']},
-  {id: 'parcels', label: 'Parcels', layers: ['ori', 'corridors', 'parcels'], colour: 'landcover'},
+  {id: 'parcels', label: 'Parcels', layers: ['ori', 'corridors', 'parcels'], colour: 'landuse'},
   {id: 'review', label: 'Review', layers: ['ori', 'parcels', 'issues'], colour: 'status'}
 ];
 
@@ -282,7 +289,7 @@ function keyRows(rows) {
 }
 
 function parcelKey() {
-  var modes = [['landcover', 'Land use'], ['status', 'Review'], ['confidence', 'Confidence'], ['record', 'Record']];
+  var modes = [['landuse', 'Land use'], ['landcover', 'Land cover'], ['status', 'Review'], ['confidence', 'Confidence'], ['record', 'Record']];
   var html = '<div class="lp-chips">' + modes.map(function (m) {
     return '<button data-colour="' + m[0] + '" class="' + (state.colourMode === m[0] ? 'active' : '') + '">' + m[1] + '</button>';
   }).join('') + '</div>';
@@ -293,7 +300,9 @@ function parcelKey() {
     ? Object.keys(RECORD).map(function (k) { return [RECORD[k].label, RECORD[k].color]; }).concat([['Not compared yet', '#5C6B63']])
     : state.colourMode === 'status'
       ? Object.keys(STATUS).map(function (k) { return [STATUS[k].label, STATUS[k].color]; })
-      : Object.keys(LANDCOVER).map(function (k) { return [k, LANDCOVER[k]]; });
+      : state.colourMode === 'landuse'
+        ? Object.keys(LANDUSE).map(function (k) { return [k, LANDUSE[k]]; })
+        : Object.keys(LANDCOVER).map(function (k) { return [k, LANDCOVER[k]]; });
   return html + keyRows(src.map(function (r) { return [r[0], 'background:' + r[1]]; }));
 }
 
@@ -303,7 +312,7 @@ function layerDefs() {
     {group: 'Input', key: 'ori', name: 'Aerial image (ORI)', info: fmt(m.gsd_m * 100, 0) + ' cm/px'},
     {group: 'What the AI found', key: 'buildings', name: 'Buildings', info: nB, legend: keyRows(nF
       ? [['Roof model', 'border:2px solid ' + PALETTE.building, nB - nF], ['Filled in — check', 'border:2px dashed ' + PALETTE.building, nF]]
-      : [['Roof outline', 'border:2px solid ' + PALETTE.building]])}
+      : [['Roof outline', 'border:2px solid ' + PALETTE.building]]).concat(s.encroachments ? keyRows([['On the road — possible encroachment', 'background:' + ENCROACH_COLOUR, s.encroachments]]) : '')}
   ];
   if (overlays.landcover) defs.push({key: 'landcover', name: 'Land cover', info: '8 classes',
     legend: '<div class="lp-grid">' + LC8.map(function (c) { return '<div>' + sw('background:' + c[2]) + esc(c[1]) + '</div>'; }).join('') + '</div>'});
@@ -409,6 +418,7 @@ function openSurvey(sid) {
     if (state.meta.has_landcover_layer) overlays.landcover = L.imageOverlay(base + 'landcover.png', b, {opacity: 0.6, pane: 'rasters'});
     buildingLayer = L.geoJSON(state.buildings, {interactive: false, pmIgnore: true, style: function (f) {
       var filled = (f.properties.source || '').indexOf(FILL_SOURCE) >= 0;
+      if (f.properties.encroachment_m2) return {color: ENCROACH_COLOUR, weight: 3, fillColor: ENCROACH_COLOUR, fillOpacity: 0.35};
       return {color: PALETTE.building, weight: filled ? 1.6 : 1.8, dashArray: filled ? '5 4' : null,
               fillColor: PALETTE.building, fillOpacity: 0.1};
     }});
@@ -498,6 +508,7 @@ function setStatus(status) {
 
 function reviewQueue() {
   return state.parcels.features.slice().filter(function (f) {
+    if (state.reviewFilter === 'encroach') return !!f.properties.encroachment_m2;
     return state.reviewFilter === 'all' || f.properties.status === state.reviewFilter;
   }).sort(function (a, b) {
     var ia = (a.properties.issues || []).length ? 0 : 1, ib = (b.properties.issues || []).length ? 0 : 1;
@@ -524,6 +535,9 @@ function setTool(tool) {
   if (tool === 'edit') {
     if (state.selected.length !== 1) { toast('Select exactly one parcel to edit its boundary.'); tool = 'select'; }
     else startEdit(state.selected[0]);
+  } else if (tool === 'split') {
+    if (state.selected.length !== 1) { toast('Select one parcel, then press Split and draw a line across it.'); tool = 'select'; }
+    else { map.pm.enableDraw('Line', {snappable: true, snapDistance: 12}); toast('Draw a line across parcel #' + state.selected[0] + ' (click to add points, click the last point again to finish).'); }
   } else if (tool === 'draw') {
     map.pm.enableDraw('Polygon', {snappable: true, snapDistance: 12});
   } else if (tool === 'merge') {
@@ -578,6 +592,20 @@ map.on('pm:create', function (e) {
   var gj = e.layer.toGeoJSON();
   map.removeLayer(e.layer);
   map.pm.disableDraw();
+  if (state.tool === 'split') {
+    var pid = state.selected[0];
+    setTool('select');
+    setSave('saving', 'Splitting…');
+    api('POST', '/api/surveys/' + encodeURIComponent(state.sid) + '/split', {id: pid, line: gj.geometry.coordinates})
+      .then(function (res) {
+        state.selected = res.ids;
+        applyServerResult(res);
+        setSave('idle', 'Saved');
+        toast('Parcel #' + pid + ' split into ' + res.ids.map(function (i) { return '#' + i; }).join(' and ') + '.');
+      })
+      .catch(function (err) { setSave('error', 'Split failed'); toast(err.message, true); });
+    return;
+  }
   var area = ringAreaM2(gj.geometry.coordinates[0]);
   if (area < MIN_DRAWN_M2) {
     setTool('select');
@@ -668,10 +696,37 @@ function overviewHtml() {
       'house + wall + courtyard as one numbered plot') +
     foundCard('parcels', 'background:rgba(232,232,232,0.3);border:1px dashed ' + PALETTE.road, fmt(s.corridor_length_m, 0) + ' m', 'roads & lanes',
       fmt(s.narrow_lane_length_m, 0) + ' m narrower than 3 m') +
+    (s.encroachments ? '<button class="found-card" data-act="encroach">' + sw('background:' + ENCROACH_COLOUR) +
+      '<span class="fc-main"><b>' + s.encroachments + '</b> possible encroachments<small>buildings extending onto a road or lane: check on site</small></span><span class="fc-go">→</span></button>' : '') +
     foundCard('review', 'background:' + STATUS.approved.color, Math.round(100 * done / total) + '%', 'reviewed',
       lowConf ? lowConf + ' low-confidence parcels to check first' : 'no low-confidence parcels') +
     '</div><div class="btn-row" style="margin-top:10px"><button class="btn primary" data-act="next">Start reviewing, least certain first</button></div></div>';
 
+  // speed and effort, measured on this survey (PS: faster surveys, less manual digitising)
+  var pr = m.processing || {};
+  var appr = feats.filter(function (f) { return f.properties.status === 'approved'; });
+  var asIs = appr.filter(function (f) { return f.properties.source === 'ai'; }).length;
+  var recd = feats.filter(function (f) { return f.properties.record_status; });
+  var recOk = recd.filter(function (f) { return f.properties.record_status === 'MATCH'; }).length;
+  html += '<div><h3 class="panel-title">Speed &amp; accuracy</h3><div class="stat-grid">' +
+    (pr.area_km2 ? tile(fmt(pr.area_km2, 2) + ' km²', 'Area processed') : '') +
+    (pr.model_seconds ? tile(fmt(pr.model_seconds / 60, 1) + ' min', 'AI models (Kaggle GPU, incl. upload)') : '') +
+    (pr.build_seconds ? tile(fmt(pr.build_seconds, 0) + ' s', 'Buildings, roads, parcels, topology') : '') +
+    tile(appr.length ? Math.round(100 * asIs / appr.length) + '%' : '—', 'Approved parcels accepted with no edit') +
+    (recd.length ? tile(Math.round(100 * recOk / recd.length) + '%', 'Parcels matching the existing record') : '') +
+    '</div><div class="note" style="margin-top:6px">' +
+    (appr.length ? asIs + ' of ' + appr.length + ' approved parcels were accepted exactly as the AI drew them; the rest needed an edit. ' : 'As parcels are approved, this shows how many the AI got right with no manual digitising. ') +
+    '<b>Tested model accuracy</b> (held-out data): ' + esc((m.model && m.model.summary) || '—') + '</div></div>';
+
+  var luc = s.land_use_count;
+  if (luc) {
+    var nlu = Object.keys(luc).reduce(function (a, k) { return a + luc[k]; }, 0) || 1;
+    html += '<div><h3 class="panel-title">Land use <span class="note">suggested, per parcel</span></h3>' +
+      Object.keys(LANDUSE).filter(function (k) { return luc[k]; }).map(function (k) {
+        return '<div class="class-row"><span>' + sw('background:' + LANDUSE[k]) + esc(k) + '</span><div class="bar"><span style="width:' + (100 * luc[k] / nlu) + '%;background:' + LANDUSE[k] + '"></span></div><span class="pct">' + luc[k] + '</span></div>';
+      }).join('') +
+      '<div class="note" style="margin-top:6px">From buildings (count, size, share of the plot), storeys from the DSM when there is one, the width of the road in front and land cover. Each parcel shows its reason; the surveyor confirms it.</div></div>';
+  }
   html += '<div><h3 class="panel-title">' + (lcf ? 'Land cover' : 'AI classes') + '</h3>' +
     (lcf ? LC8.map(function (c) {
       var v = lcf[c[0]] || 0;
@@ -719,7 +774,7 @@ function reviewHtml() {
       '<div class="btn-row"><button class="btn primary" data-act="merge">Merge into one</button><button class="btn" data-act="clear">Clear</button></div>' +
       statusButtons() + '</div>';
   }
-  var filters = [['draft', 'To review'], ['field_check', 'Field check'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']];
+  var filters = [['draft', 'To review'], ['encroach', 'Encroachment'], ['field_check', 'Field check'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']];
   var q = reviewQueue();
   html += '<div><h3 class="panel-title">Review queue <span class="note">issues first, then lowest confidence</span></h3>' +
     '<div class="filter-row">' + filters.map(function (fl) {
@@ -752,11 +807,15 @@ function parcelDetailHtml(f) {
     '<span class="tag">' + esc(p.prov_pin) + '</span><span class="tag">' + (p.source === 'ai' ? 'AI extracted' : p.source === 'manual' ? 'Drawn manually' : 'Edited') + '</span></div>' +
     '<div class="kv-grid">' +
     kv('Area', fmt(p.area_m2) + ' m²') + kv('Perimeter', fmt(p.perimeter_m) + ' m') +
+    (p.land_use ? kv('Land use (suggested)', p.land_use) + kv('Why', p.land_use_reason || '—') : '') +
+    (p.buildings != null ? kv('Buildings on plot', p.buildings) : '') +
+    (p.storeys ? kv('Storeys (from DSM)', p.storeys + ' · ' + fmt(p.height_m) + ' m') : '') +
+    (p.frontage_road_m ? kv('Road in front', fmt(p.frontage_road_m, 0) + ' m wide') : '') +
     kv('Land cover', p.landcover || '—') + kv('Built-up', p.built_pct == null ? '—' : fmt(p.built_pct, 0) + '%') +
     kv('Road frontage', p.road_frontage == null ? '—' : (p.road_frontage ? 'Yes' : 'No — check access')) +
     (p.layout ? kv('Laid out as', p.layout) : '') +
     kv('Vegetation', p.veg_pct == null ? '—' : fmt(p.veg_pct, 0) + '%') +
-    '</div>' + landCoverBreakdown(p) +
+    '</div>' + (p.encroachment_m2 ? '<div class="finding sev-critical" style="margin-top:10px"><div><b>Possible encroachment</b><p>A building on this plot extends ' + fmt(p.encroachment_m2) + ' m² onto the road or lane. Check on site (Field check) before approving.</p></div></div>' : '') + landCoverBreakdown(p) +
     '<div style="margin-top:12px"><div class="class-row" style="grid-template-columns:110px 1fr 44px"><span>AI confidence</span>' +
     '<div class="bar"><span style="width:' + (100 * (conf || 0)) + '%;background:' + confColour(conf) + '"></span></div><span class="pct">' + (conf == null ? '—' : conf.toFixed(2)) + '</span></div>' +
     '<div class="note">' + confidenceNote(p) + '</div></div>' +
@@ -861,6 +920,7 @@ function wireTab(body) {
   body.querySelectorAll('[data-act]').forEach(function (el) {
     el.addEventListener('click', function () {
       var act = el.dataset.act;
+      if (act === 'encroach') { state.tab = 'review'; state.reviewFilter = 'encroach'; setView('review'); renderTabs(); return; }
       if (act === 'next') { if (!state.on.parcels) setView('review'); state.tab = 'review'; state.reviewFilter = 'draft'; nextToReview(); }
       else if (act === 'autofix') doAutoFix();
       else if (act === 'merge') doMerge();
