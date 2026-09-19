@@ -9,6 +9,7 @@ what is left into houses (watershed on distance to the edge), and keep the piece
 and compact enough to be a structure. Filled houses are tagged so the reviewer can
 check them.
 """
+import cv2
 import numpy as np
 from scipy import ndimage as ndi
 from skimage.segmentation import watershed
@@ -18,7 +19,8 @@ MIN_FILL_M2 = 20          # smaller pieces are usually noise or a roof-model edg
 SLIVER_WIDTH_M = 2.0      # land-cover edges hugging an existing roof are removed by opening this wide
 GAP_M = 0.6               # keep this much gap to roofs the model already drew
 HOUSE_SPACING_M = 5.0     # min distance between two house centres when splitting a block
-MIN_SOLIDITY = 0.6        # area / bounding-box area; ragged blobs are not structures
+MIN_SOLIDITY = 0.75       # area / convex-hull area; ragged blobs are not structures (a hull, not the
+                          # grid-aligned box, so buildings on diagonal streets are not thrown away)
 MIN_WIDTH_M = 3.5         # a house is at least this wide; thinner pieces are gaps between roofs
 
 
@@ -55,10 +57,15 @@ def fill_missed_roofs(roofs, building_prob, valid, gsd, thresh=0.5):
             continue
         m = pieces[sl] == pid
         area = m.sum()
-        if (area * px_m2 < MIN_FILL_M2 or area / m.size < MIN_SOLIDITY
+        if (area * px_m2 < MIN_FILL_M2 or area / _hull_area(m) < MIN_SOLIDITY
                 or 2 * ndi.distance_transform_edt(np.pad(m, 1))[1:-1, 1:-1].max() * gsd < MIN_WIDTH_M):
             continue
         out[sl][m] = nxt
         fill[sl][m] = True
         nxt += 1
     return out, fill
+
+
+def _hull_area(mask):
+    cs, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return max(cv2.contourArea(cv2.convexHull(np.vstack(cs))), 1.0)
