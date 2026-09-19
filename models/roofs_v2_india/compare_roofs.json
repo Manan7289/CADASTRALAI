@@ -1,0 +1,195 @@
+{
+  "total": {
+    "old": {
+      "matched": 71,
+      "part": 45,
+      "off": 8
+    },
+    "new": {
+      "matched": 512,
+      "part": 373,
+      "off": 160
+    }
+  },
+  "per": {
+    "intest_HSRLayoutBengaluru_760_640": {
+      "labelled_houses": 11,
+      "old": {
+        "matched": 6,
+        "part": 0,
+        "off": 0
+      },
+      "new": {
+        "matched": 8,
+        "part": 7,
+        "off": 1
+      }
+    },
+    "intest_SinghNagar_500_300": {
+      "labelled_houses": 20,
+      "old": {
+        "matched": 1,
+        "part": 5,
+        "off": 0
+      },
+      "new": {
+        "matched": 7,
+        "part": 15,
+        "off": 4
+      }
+    },
+    "intest_VaishaliNagarJaipur_300_40": {
+      "labelled_houses": 22,
+      "old": {
+        "matched": 1,
+        "part": 3,
+        "off": 0
+      },
+      "new": {
+        "matched": 12,
+        "part": 13,
+        "off": 12
+      }
+    },
+    "uptest_Bhopal_0_2688": {
+      "labelled_houses": 282,
+      "old": {
+        "matched": 6,
+        "part": 6,
+        "off": 0
+      },
+      "new": {
+        "matched": 122,
+        "part": 59,
+        "off": 7
+      }
+    },
+    "uptest_Bhopal_1152_2688": {
+      "labelled_houses": 143,
+      "old": {
+        "matched": 8,
+        "part": 2,
+        "off": 2
+      },
+      "new": {
+        "matched": 47,
+        "part": 35,
+        "off": 30
+      }
+    },
+    "uptest_Bhopal_1536_2688": {
+      "labelled_houses": 151,
+      "old": {
+        "matched": 14,
+        "part": 7,
+        "off": 4
+      },
+      "new": {
+        "matched": 63,
+        "part": 39,
+        "off": 45
+      }
+    },
+    "uptest_Bhopal_1920_2688": {
+      "labelled_houses": 130,
+      "old": {
+        "matched": 9,
+        "part": 2,
+        "off": 0
+      },
+      "new": {
+        "matched": 55,
+        "part": 30,
+        "off": 23
+      }
+    },
+    "uptest_Bhopal_2304_2688": {
+      "labelled_houses": 86,
+      "old": {
+        "matched": 6,
+        "part": 7,
+        "off": 0
+      },
+      "new": {
+        "matched": 44,
+        "part": 39,
+        "off": 5
+      }
+    },
+    "uptest_Bhopal_2688_2688": {
+      "labelled_houses": 147,
+      "old": {
+        "matched": 14,
+        "part": 11,
+        "off": 0
+      },
+      "new": {
+        "matched": 85,
+        "part": 46,
+        "off": 4
+      }
+    },
+    "uptest_Bhopal_384_2688": {
+      "labelled_houses": 174,
+      "old": {
+        "matched": 5,
+        "part": 2,
+        "off": 1
+      },
+      "new": {
+        "matched": 49,
+        "part": 52,
+        "off": 9
+      }
+    },
+    "uptest_Bhopal_768_2688": {
+      "labelled_houses": 97,
+      "old": {
+        "matched": 1,
+        "part": 0,
+        "off": 1
+      },
+      "new": {
+        "matched": 20,
+        "part": 38,
+        "off": 20
+      }
+    },
+    "ChandigarhSector22": {
+      "houses": {
+        "old": 5,
+        "new": 26
+      }
+    },
+    "DwarkaSector10Delhi": {
+      "houses": {
+        "old": 16,
+        "new": 54
+      }
+    },
+    "HSRLayoutBengaluru": {
+      "houses": {
+        "old": 153,
+        "new": 281
+      }
+    },
+    "Potsdam313": {
+      "houses": {
+        "old": 23,
+        "new": 71
+      }
+    },
+    "SinghNagar": {
+      "houses": {
+        "old": 96,
+        "new": 320
+      }
+    },
+    "VaishaliNagarJaipur": {
+      "houses": {
+        "old": 122,
+        "new": 316
+      }
+    }
+  }
+}

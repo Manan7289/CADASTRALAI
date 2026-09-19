@@ -28,7 +28,8 @@ MODELS = {
     "stack_dplus": {
         "file": None, "kind": "kaggle", "gsd_m": 0.3,
         "label": "Approved stack on Kaggle GPU: roofs D+ (our U-Net + Mask R-CNN + teammate Inria/UAVid) + land cover v2",
-        "summary": "The shipped models. Roofs, fair Gandhinagar exam: 88% of houses found, outline IoU 0.89. "
+        "summary": "The shipped models. Roofs (fine-tuned on Indian roofs): 51% of houses found on held-out Indian crops (was 15%), "
+                   "Gandhinagar exam 89%. "
                    "Land cover mIoU 0.67. Runs on Kaggle (a few minutes); the laptop only prepares and imports.",
         "limits": "Needs internet and the team's Kaggle token. Processed at 0.3 m; a DSM, if uploaded, is still used "
                   "for boundary edges.",

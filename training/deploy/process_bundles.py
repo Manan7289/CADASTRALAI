@@ -30,7 +30,9 @@ def main():
     if not jobs:
         raise SystemExit("no job_*.npz inputs attached")
     fr = Path(glob.glob("/kaggle/input/**/unet_inria_best.pt", recursive=True)[0]).parent
-    d8w = glob.glob("/kaggle/input/**/maskrcnn_stacked8_dplus.pt", recursive=True)[0]
+    d8w = (glob.glob("/kaggle/input/**/maskrcnn_stacked8_india.pt", recursive=True) or    # v2: D+ fine-tuned on Indian roofs
+           glob.glob("/kaggle/input/**/maskrcnn_stacked8_dplus.pt", recursive=True))[0]
+    log("roof model", d8w)
     inria, uavid = bf.load_friend(fr / "unet_inria_best.pt"), bf.load_friend(fr / "uavid_unet_best.pt")
     nets = [cf.load_unet(bf.ROOFS / f"s1_fold{k}.pt") for k in (0, 1)]
     d8 = cf.build_maskrcnn(8); d8.load_state_dict(torch.load(d8w, map_location="cpu")); d8.eval()
