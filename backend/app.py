@@ -107,6 +107,17 @@ def api_split(sid):
     return jsonify({"parcels": parcels_fc, "issues": issues_fc, "ids": ids})
 
 
+@app.route("/api/surveys/<sid>/training-labels", methods=["POST"])
+def api_training_labels(sid):
+    import training_labels
+    try:
+        return jsonify(training_labels.export(sid))
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @app.route("/api/surveys/<sid>/report")
 def api_report(sid):
     import report

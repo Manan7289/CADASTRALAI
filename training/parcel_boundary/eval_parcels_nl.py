@@ -70,7 +70,7 @@ def feats_all(url):
 
 def boundary_net():
     import segmentation_models_pytorch as smp
-    ck = torch.load(ROOT / "models/parcel_boundary_v1/parcel_boundary_unet.pt", map_location="cpu", weights_only=False)
+    ck = torch.load(ROOT / "models/parcel_boundary_v2_india/parcel_boundary_unet_india.pt", map_location="cpu", weights_only=False)
     net = smp.Unet("resnet34", encoder_weights=None, in_channels=3, classes=1)
     net.load_state_dict(ck["state_dict"])
     return net.eval()
