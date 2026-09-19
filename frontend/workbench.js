@@ -8,17 +8,24 @@ var STATUS = {
   field_check: {label: 'Field check', color: '#E0A94A'},
   rejected:    {label: 'Rejected',    color: '#E2685F'}
 };
+// One palette for every layer, legend and chart (backend survey.PALETTE draws the rasters):
+// a colour means the same thing wherever it appears.
+var PALETTE = {building: '#FF6B4A', road: '#E8E8E8', paved: '#969696', tree: '#2E8B3E', grass: '#8FD16A',
+               agriculture: '#C9D65B', bare: '#C8955A', water: '#3A86FF', open: '#D8C9A3'};
 var LANDCOVER = {
-  'Built-up': '#7C9BA6', 'Vegetated open land': '#5FA37A', 'Open / vacant land': '#B08D6B',
-  'Barren land': '#8B3A3A', 'Paved / developed open land': '#9A9A9A', 'Water': '#2F6FE0'
+  'Built-up': PALETTE.building, 'Vegetated open land': PALETTE.grass, 'Open / vacant land': PALETTE.open,
+  'Barren land': PALETTE.bare, 'Paved / developed open land': PALETTE.paved, 'Water': PALETTE.water
 };
-// 8-class land-cover layer (land cover v2); same colours as landcover.png from the backend
-var LC8 = [['building', '#DE1F07'], ['road', '#FFFFFF'], ['tree', '#226126'], ['grass / scrub', '#00FF24'],
-           ['agriculture', '#4BB549'], ['bare land', '#800000'], ['water', '#0045FF'], ['paved / developed', '#949494']];
+// 8-class land-cover layer (land cover v2): [key in the survey stats, label, colour]
+var LC8 = [['building', 'Building', PALETTE.building], ['road', 'Road', PALETTE.road], ['tree', 'Tree', PALETTE.tree],
+           ['grass / scrub', 'Grass / scrub', PALETTE.grass], ['agriculture', 'Farmland', PALETTE.agriculture],
+           ['bare land', 'Bare / barren land', PALETTE.bare], ['water', 'Water', PALETTE.water],
+           ['paved / developed', 'Paved open area', PALETTE.paved]];
 var CLASS_META = [
-  ['building', 'Building', '#4666E6'], ['road', 'Road / paved', '#E1E1E1'],
-  ['low_veg', 'Low vegetation', '#82D7C8'], ['tree', 'Tree', '#28A046'], ['clutter', 'Other / clutter', '#C85A5A']
+  ['building', 'Building', PALETTE.building], ['road', 'Road / paved', PALETTE.road],
+  ['low_veg', 'Low vegetation', PALETTE.grass], ['tree', 'Tree', PALETTE.tree], ['clutter', 'Other', PALETTE.paved]
 ];
+var FILL_SOURCE = 'fill';  // building footprints filled in from the land-cover model carry this in `source`
 var ISSUE_LABEL = {
   INVALID: 'Invalid geometry', MULTIPART: 'Multipart parcel', OVERLAP: 'Overlap', DUPLICATE: 'Duplicate',
   GAP: 'Gap between parcels', SLIVER: 'Sliver', TOO_SMALL: 'Too small', HOLE: 'Encloses another area'
@@ -34,8 +41,9 @@ var RECORD = {
 var state = {
   surveys: [], sid: null, meta: null,
   parcels: null, issues: null, buildings: null, corridors: null,
-  selected: [], tab: 'overview', colourMode: 'status', tool: 'select',
-  reviewFilter: 'draft', editingLayer: null
+  selected: [], tab: 'overview', colourMode: 'landcover', tool: 'select',
+  reviewFilter: 'draft', editingLayer: null,
+  view: 'parcels', on: {}  // on: which layer keys should be on the map
 };
 
 function esc(s) {
@@ -81,18 +89,32 @@ var map = L.map('map', {zoomControl: true, minZoom: 12, maxZoom: 23, zoomSnap: 0
 map.pm.setGlobalOptions({snappable: true, snapDistance: 12, allowSelfIntersection: false});
 map.pm.setPathOptions({color: '#45C7B8', fillOpacity: 0.15});
 
+// raster overlays sit under every vector layer and never catch clicks
+map.createPane('rasters');
+map.getPane('rasters').style.zIndex = 350;
+map.getPane('rasters').style.pointerEvents = 'none';
+
 var overlays = {};
-var layersControl = null;
+var extraLayers = [];  // layers other modules add (records.js): [{layer, name}]
 var parcelLayer = null, issueLayer = null, buildingLayer = null, corridorLayer = null, labelLayer = null;
 
 function clearMap() {
   [parcelLayer, issueLayer, buildingLayer, corridorLayer, labelLayer].forEach(function (l) { if (l) map.removeLayer(l); });
   Object.keys(overlays).forEach(function (k) { map.removeLayer(overlays[k]); });
+  extraLayers.forEach(function (x) { map.removeLayer(x.layer); });
   overlays = {};
+  extraLayers = [];
   parcelLayer = issueLayer = buildingLayer = corridorLayer = labelLayer = null;
-  if (layersControl) layersControl.remove();
-  layersControl = null;
 }
+
+// what records.js expects from a Leaflet layers control
+var layersControl = {
+  addOverlay: function (layer, name) { extraLayers.push({layer: layer, name: name}); renderLayerPanel(); },
+  removeLayer: function (layer) {
+    extraLayers = extraLayers.filter(function (x) { return x.layer !== layer; });
+    renderLayerPanel();
+  }
+};
 
 function parcelStyle(f) {
   var p = f.properties;
@@ -126,19 +148,15 @@ function buildParcelLayer() {
         selectParcel(f.properties.id, e.originalEvent.shiftKey || state.tool === 'merge');
       });
     }
-  }).addTo(map);
+  });
   labelLayer = L.layerGroup();
   state.parcels.features.forEach(function (f) {
     var c = L.geoJSON(f).getBounds().getCenter();
     labelLayer.addLayer(L.tooltip({permanent: true, direction: 'center', className: 'parcel-label', interactive: false})
       .setLatLng(c).setContent(String(f.properties.id)));
   });
-  updateLabelVisibility();
-  if (layersControl) {
-    if (overlays.parcels) layersControl.removeLayer(overlays.parcels);
-    layersControl.addOverlay(parcelLayer, 'Parcels');
-  }
   overlays.parcels = parcelLayer;
+  applyLayers();
 }
 
 function updateLabelVisibility() {
@@ -146,8 +164,7 @@ function updateLabelVisibility() {
   if (map.getZoom() >= 19.5 && map.hasLayer(parcelLayer)) map.addLayer(labelLayer);
   else map.removeLayer(labelLayer);
 }
-map.on('zoomend overlayadd overlayremove', updateLabelVisibility);
-map.on('overlayadd overlayremove', function () { renderLegend(); });
+map.on('zoomend', updateLabelVisibility);
 
 function buildIssueLayer() {
   if (issueLayer) map.removeLayer(issueLayer);
@@ -158,55 +175,183 @@ function buildIssueLayer() {
       return {color: high ? '#E2685F' : '#E0A94A', weight: 2, dashArray: '4 3', fillColor: high ? '#E2685F' : '#E0A94A', fillOpacity: 0.45};
     },
     pointToLayer: function (f, ll) { return L.circleMarker(ll, {radius: 6}); }
-  }).addTo(map);
-  if (layersControl && overlays.issues) {
-    layersControl.removeLayer(overlays.issues);
-    layersControl.addOverlay(issueLayer, 'Topology issues');
-  }
+  });
   overlays.issues = issueLayer;
+  applyLayers();
 }
 
-function restyle() { if (parcelLayer) parcelLayer.setStyle(parcelStyle); renderLegend(); }
+function restyle() { if (parcelLayer) parcelLayer.setStyle(parcelStyle); renderLayerPanel(); }
 
-function legendKey(title, rows) {
-  return '<div class="lg-sec"><b>' + esc(title) + '</b>' + rows.map(function (r) {
-    return '<div><span class="sw" style="' + r[1] + '"></span>' + esc(r[0]) + '</div>';
+// ---------------------------------------------------------------- views + layer panel
+// The five views follow the pipeline, so each one is a self-explanatory screen (and a slide).
+var VIEWS = [
+  {id: 'image', label: 'Image', layers: ['ori']},
+  {id: 'buildings', label: 'Buildings', layers: ['ori', 'buildings']},
+  {id: 'landcover', label: 'Land cover', layers: ['ori', 'LC']},
+  {id: 'parcels', label: 'Parcels', layers: ['ori', 'corridors', 'parcels'], colour: 'landcover'},
+  {id: 'review', label: 'Review', layers: ['ori', 'parcels', 'issues'], colour: 'status'}
+];
+
+function viewLayers(v) {
+  return v.layers.map(function (k) { return k === 'LC' ? (state.meta && state.meta.has_landcover_layer ? 'landcover' : 'classes') : k; });
+}
+
+function setView(id) {
+  var v = VIEWS.filter(function (x) { return x.id === id; })[0] || VIEWS[3];
+  state.view = v.id;
+  state.on = {};
+  viewLayers(v).forEach(function (k) { state.on[k] = true; });
+  if (v.colour) state.colourMode = v.colour;
+  if (parcelLayer) parcelLayer.setStyle(parcelStyle);
+  applyLayers();
+}
+
+function toggleLayer(key, on) {
+  state.on[key] = on;
+  var keys = Object.keys(state.on).filter(function (k) { return state.on[k]; }).sort().join();
+  var match = VIEWS.filter(function (v) { return viewLayers(v).slice().sort().join() === keys; })[0];
+  state.view = match ? match.id : null;
+  applyLayers();
+}
+
+function layerByKey() {
+  return {ori: overlays.ori, classes: overlays.classes, height: overlays.height, landcover: overlays.landcover,
+          corridors: corridorLayer, parcels: parcelLayer, buildings: buildingLayer, issues: issueLayer};
+}
+
+function applyLayers() {
+  var byKey = layerByKey();
+  Object.keys(byKey).forEach(function (k) {
+    var l = byKey[k];
+    if (!l) return;
+    if (state.on[k] && !map.hasLayer(l)) map.addLayer(l);
+    else if (!state.on[k] && map.hasLayer(l)) map.removeLayer(l);
+  });
+  // drawing order: roads under parcels, building outlines over parcels, problems on top
+  [corridorLayer, parcelLayer, buildingLayer, issueLayer].concat(extraLayers.map(function (x) { return x.layer; }))
+    .forEach(function (l) { if (l && map.hasLayer(l) && l.bringToFront) l.bringToFront(); });
+  updateLabelVisibility();
+  var tb = document.querySelector('.map-toolbar');
+  if (tb) tb.classList.toggle('hidden', !state.on.parcels);
+  renderViewBar();
+  renderLayerPanel();
+}
+
+function renderViewBar() {
+  if (state.sid) history.replaceState(null, '', '?survey=' + encodeURIComponent(state.sid) + (state.view ? '&view=' + state.view : ''));
+  document.querySelectorAll('#viewBar button').forEach(function (b) { b.classList.toggle('active', b.dataset.view === state.view); });
+  var cap = $('viewCaption');
+  var text = state.meta && state.view ? viewCaption(state.view) : '';
+  cap.innerHTML = text;
+  cap.style.display = text ? '' : 'none';
+}
+
+function nFilled() {
+  return state.buildings ? state.buildings.features.filter(function (f) { return (f.properties.source || '').indexOf(FILL_SOURCE) >= 0; }).length : 0;
+}
+
+function topLandCover(n) {
+  var lcf = state.meta.stats && state.meta.stats.land_cover_fraction;
+  if (!lcf) return '';
+  return LC8.slice().sort(function (a, b) { return (lcf[b[0]] || 0) - (lcf[a[0]] || 0); }).slice(0, n)
+    .map(function (c) { return esc(c[1].toLowerCase()) + ' ' + Math.round(100 * (lcf[c[0]] || 0)) + '%'; }).join(', ');
+}
+
+function viewCaption(id) {
+  var m = state.meta, s = m.stats || {}, nP = state.parcels.features.length, nB = state.buildings.features.length, nF = nFilled();
+  var done = state.parcels.features.filter(function (f) { return f.properties.status !== 'draft'; }).length;
+  if (id === 'image') return '<b>1 · Input image.</b> The aerial orthoimage (ORI), ' + fmt(m.gsd_m * 100, 0) +
+    ' cm per pixel' + (m.used_height ? ', with a surface-height model (DSM)' : '') + '. Everything else on this map is drawn by the AI from it.';
+  if (id === 'buildings') return '<b>2 · Buildings.</b> ' + nB + ' roofs outlined by the AI.' +
+    (nF ? ' <span class="k-solid"></span> Solid: roof model. <span class="k-dash"></span> Dashed: missed by the roof model, found by the land-cover model — check these.' : '');
+  if (id === 'landcover') return '<b>3 · Land cover.</b> Every pixel classified as ' + (m.has_landcover_layer
+    ? 'building, road, tree, grass, farmland, bare land, water or paved area' : 'building, road / paved, low vegetation, tree or other') +
+    (topLandCover(3) ? ' — here mostly ' + topLandCover(3) : '') + '.';
+  if (id === 'parcels') return '<b>4 · Parcels.</b> ' + nP + ' numbered plots. Each house with its wall, courtyard and open land around it is one parcel; roads and lanes (white) separate them. Colour: main land use.';
+  if (id === 'review') return '<b>5 · Review.</b> ' + done + ' of ' + nP + ' parcels checked. The list on the right starts with the least certain ones: approve, send for a field check or reject. ' +
+    (state.issues.features.length ? state.issues.features.length + ' topology problem(s) shown in red.' : 'No topology problems.');
+  return '';
+}
+
+function sw(style) { return '<span class="sw" style="' + style + '"></span>'; }
+function keyRows(rows) {
+  return '<div class="lp-key">' + rows.map(function (r) {
+    return '<div>' + sw(r[1]) + '<span>' + esc(r[0]) + '</span>' + (r[2] != null ? '<span class="n">' + esc(r[2]) + '</span>' : '') + '</div>';
   }).join('') + '</div>';
 }
 
-// one key per visible layer, so the same colour never means two things without saying which layer it belongs to
-function renderLegend() {
-  var html = '', on = function (l) { return l && map.hasLayer(l); };
-  if (on(parcelLayer)) {
-    if (state.colourMode === 'confidence') {
-      html += '<div class="lg-sec"><b>Parcels: AI confidence</b><div class="ramp"></div><div class="ramp-lbl"><span>low</span><span>0.5</span><span>0.7</span><span>high</span></div></div>';
-    } else if (state.colourMode === 'record') {
-      html += legendKey('Parcels: existing record', Object.keys(RECORD).map(function (k) {
-        return [RECORD[k].label, 'background:' + RECORD[k].color];
-      }).concat([['Not compared yet', 'background:#5C6B63']]));
-    } else if (state.colourMode === 'landcover') {
-      html += legendKey('Parcels: main land use', Object.keys(LANDCOVER).map(function (k) {
-        return [k, 'background:' + LANDCOVER[k]];
-      }));
-    } else {
-      html += legendKey('Parcels: review status', Object.keys(STATUS).map(function (k) {
-        return [STATUS[k].label, 'background:' + STATUS[k].color];
-      }));
-    }
+function parcelKey() {
+  var modes = [['landcover', 'Land use'], ['status', 'Review'], ['confidence', 'Confidence'], ['record', 'Record']];
+  var html = '<div class="lp-chips">' + modes.map(function (m) {
+    return '<button data-colour="' + m[0] + '" class="' + (state.colourMode === m[0] ? 'active' : '') + '">' + m[1] + '</button>';
+  }).join('') + '</div>';
+  if (state.colourMode === 'confidence') {
+    return html + '<div class="lp-key"><div class="ramp"></div><div class="ramp-lbl"><span>low</span><span>0.5</span><span>0.7</span><span>high</span></div></div>';
   }
-  if (on(issueLayer)) html += legendKey('Topology', [['Has topology issue', 'background:transparent;border:2px solid #E2685F']]);
-  if (on(buildingLayer)) html += legendKey('Building footprints', [
-    ['Roof model outline', 'background:transparent;border:2px solid #6E8BFF'],
-    ['Filled in from land cover (check)', 'background:transparent;border:2px dashed #F2B134']]);
-  if (on(overlays.classes)) html += legendKey('AI segmentation layer', CLASS_META.map(function (c) {
-    return [c[1], 'background:' + c[2]];
-  }));
-  if (on(overlays.landcover)) html += legendKey('Land cover layer', LC8.map(function (c) {
-    return [c[0], 'background:' + c[1] + ';border:1px solid #555'];
-  }));
-  if (!html) html = '<span style="opacity:.7">Turn on a layer to see its colours</span>';
-  $('mapLegend').innerHTML = html;
+  var src = state.colourMode === 'record'
+    ? Object.keys(RECORD).map(function (k) { return [RECORD[k].label, RECORD[k].color]; }).concat([['Not compared yet', '#5C6B63']])
+    : state.colourMode === 'status'
+      ? Object.keys(STATUS).map(function (k) { return [STATUS[k].label, STATUS[k].color]; })
+      : Object.keys(LANDCOVER).map(function (k) { return [k, LANDCOVER[k]]; });
+  return html + keyRows(src.map(function (r) { return [r[0], 'background:' + r[1]]; }));
 }
+
+function layerDefs() {
+  var m = state.meta, s = m.stats || {}, nB = state.buildings.features.length, nF = nFilled();
+  var defs = [
+    {group: 'Input', key: 'ori', name: 'Aerial image (ORI)', info: fmt(m.gsd_m * 100, 0) + ' cm/px'},
+    {group: 'What the AI found', key: 'buildings', name: 'Buildings', info: nB, legend: keyRows(nF
+      ? [['Roof model', 'border:2px solid ' + PALETTE.building, nB - nF], ['Filled in — check', 'border:2px dashed ' + PALETTE.building, nF]]
+      : [['Roof outline', 'border:2px solid ' + PALETTE.building]])}
+  ];
+  if (overlays.landcover) defs.push({key: 'landcover', name: 'Land cover', info: '8 classes',
+    legend: '<div class="lp-grid">' + LC8.map(function (c) { return '<div>' + sw('background:' + c[2]) + esc(c[1]) + '</div>'; }).join('') + '</div>'});
+  defs.push({key: 'corridors', name: 'Roads & lanes', info: fmt(s.corridor_length_m, 0) + ' m',
+    legend: keyRows([['Access corridor', 'background:rgba(232,232,232,0.3);border:1px dashed ' + PALETTE.road]])});
+  defs.push({key: 'parcels', name: 'Parcels', info: state.parcels.features.length, legend: parcelKey()});
+  defs.push({key: 'issues', name: 'Topology problems', info: state.issues.features.length,
+    legend: keyRows([['Overlap, gap, sliver…', 'background:rgba(226,104,95,0.45);border:1px dashed #E2685F']])});
+  if (overlays.height) defs.push({group: 'More', key: 'height', name: 'Height above ground', info: 'nDSM'});
+  defs.push({group: overlays.height ? null : 'More', key: 'classes', name: 'Raw AI classes', info: '5 classes',
+    legend: '<div class="lp-grid">' + CLASS_META.map(function (c) { return '<div>' + sw('background:' + c[2]) + esc(c[1]) + '</div>'; }).join('') + '</div>'});
+  return defs;
+}
+
+function renderLayerPanel() {
+  var el = $('layerPanel');
+  if (!el || !state.meta || !state.buildings) return;
+  var html = '';
+  layerDefs().forEach(function (d) {
+    if (d.group) html += '<div class="lp-group">' + esc(d.group) + '</div>';
+    var on = !!state.on[d.key];
+    html += '<div class="lp-row' + (on ? ' on' : '') + '"><label><input type="checkbox" data-layer="' + d.key + '"' + (on ? ' checked' : '') + '>' +
+      '<span class="lp-name">' + esc(d.name) + '</span><span class="n">' + esc(d.info) + '</span></label>' +
+      (on && d.legend ? d.legend : '') + '</div>';
+  });
+  extraLayers.forEach(function (x, i) {
+    var on = map.hasLayer(x.layer);
+    html += '<div class="lp-row' + (on ? ' on' : '') + '"><label><input type="checkbox" data-extra="' + i + '"' + (on ? ' checked' : '') + '>' +
+      '<span class="lp-name">' + esc(x.name) + '</span></label></div>';
+  });
+  el.querySelector('.lp-body').innerHTML = html;
+}
+
+$('layerPanel').addEventListener('change', function (e) {
+  var t = e.target;
+  if (t.dataset.layer) toggleLayer(t.dataset.layer, t.checked);
+  else if (t.dataset.extra != null) {
+    var x = extraLayers[Number(t.dataset.extra)];
+    if (x) { if (t.checked) map.addLayer(x.layer); else map.removeLayer(x.layer); applyLayers(); }
+  }
+});
+$('layerPanel').addEventListener('click', function (e) {
+  var b = e.target.closest('[data-colour]');
+  if (b) { state.colourMode = b.dataset.colour; restyle(); }
+  if (e.target.closest('.lp-head')) $('layerPanel').classList.toggle('collapsed');
+});
+document.querySelectorAll('#viewBar button').forEach(function (b) {
+  b.addEventListener('click', function () { setView(b.dataset.view); });
+});
 
 // ---------------------------------------------------------------- data
 function loadSurveys() {
@@ -242,43 +387,34 @@ function openSurvey(sid) {
     state.sid = sid;
     state.meta = res[0]; state.parcels = res[1]; state.issues = res[2]; state.buildings = res[3]; state.corridors = res[4];
     state.selected = [];
-    history.replaceState(null, '', '?survey=' + encodeURIComponent(sid));
     $('surveySubtitle').textContent = 'Survey Workbench · ' + state.meta.name;
 
     var b = state.meta.bounds;
     var tiles = state.meta.tiles;
-    overlays.ori = (tiles && tiles.count
+    overlays.ori = tiles && tiles.count
       ? L.tileLayer(base + 'tiles/{z}/{x}/{y}.webp', {
           minNativeZoom: tiles.min_zoom, maxNativeZoom: tiles.max_zoom, maxZoom: 23,
           bounds: L.latLngBounds(b), attribution: esc(state.meta.source)})
-      : L.imageOverlay(base + 'ori.webp', b, {attribution: esc(state.meta.source)})
-    ).addTo(map);
-    overlays.classes = L.imageOverlay(base + 'classes.png', b, {opacity: 0.55});
-    if (state.meta.has_height_layer) overlays.height = L.imageOverlay(base + 'height.png', b, {opacity: 0.6});
-    if (state.meta.has_landcover_layer) overlays.landcover = L.imageOverlay(base + 'landcover.png', b, {opacity: 0.55});
+      : L.imageOverlay(base + 'ori.webp', b, {attribution: esc(state.meta.source), pane: 'rasters'});
+    overlays.classes = L.imageOverlay(base + 'classes.png', b, {opacity: 0.6, pane: 'rasters'});
+    if (state.meta.has_height_layer) overlays.height = L.imageOverlay(base + 'height.png', b, {opacity: 0.6, pane: 'rasters'});
+    if (state.meta.has_landcover_layer) overlays.landcover = L.imageOverlay(base + 'landcover.png', b, {opacity: 0.6, pane: 'rasters'});
     buildingLayer = L.geoJSON(state.buildings, {interactive: false, pmIgnore: true, style: function (f) {
-      return (f.properties.source || '').indexOf('fill') >= 0
-        ? {color: '#F2B134', weight: 1.5, dashArray: '4 3', fillOpacity: 0.1}
-        : {color: '#6E8BFF', weight: 1, fillOpacity: 0.12};
+      var filled = (f.properties.source || '').indexOf(FILL_SOURCE) >= 0;
+      return {color: PALETTE.building, weight: filled ? 1.6 : 1.8, dashArray: filled ? '5 4' : null,
+              fillColor: PALETTE.building, fillOpacity: 0.1};
     }});
-    corridorLayer = L.geoJSON(state.corridors, {interactive: false, pmIgnore: true, style: {color: '#E7EEE9', weight: 1, dashArray: '3 3', fillColor: '#E7EEE9', fillOpacity: 0.18}});
+    corridorLayer = L.geoJSON(state.corridors, {interactive: false, pmIgnore: true,
+      style: {color: PALETTE.road, weight: 1, dashArray: '3 3', fillColor: PALETTE.road, fillOpacity: 0.25}});
     overlays.buildings = buildingLayer;
     overlays.corridors = corridorLayer;
+    var wantView = new URLSearchParams(location.search).get('view');
+    setView(VIEWS.some(function (v) { return v.id === wantView; }) ? wantView : (state.view || 'parcels'));
     buildParcelLayer();
     buildIssueLayer();
 
-    var ctl = {'Orthoimage (ORI)': overlays.ori, 'AI segmentation (5 classes)': overlays.classes};
-    if (overlays.height) ctl['Height above ground (nDSM)'] = overlays.height;
-    if (overlays.landcover) ctl['Land cover (roads, vegetation, bare land…)'] = overlays.landcover;
-    ctl['Access corridors'] = corridorLayer;
-    ctl['Building footprints'] = buildingLayer;
-    ctl['Parcels'] = parcelLayer;
-    ctl['Topology issues'] = issueLayer;
-    layersControl = L.control.layers(null, ctl, {position: 'bottomleft', collapsed: false}).addTo(map);
-
     map.invalidateSize();
     map.fitBounds(b);
-    renderLegend();
     renderTabs();
     $('loadingScreen').style.display = 'none';
     document.dispatchEvent(new CustomEvent('wb:survey-opened', {detail: {sid: sid, base: base}}));
@@ -502,42 +638,57 @@ function overviewHtml() {
   feats.forEach(function (f) { counts[f.properties.status] = (counts[f.properties.status] || 0) + 1; });
   var total = feats.length || 1;
   var lowConf = feats.filter(function (f) { return f.properties.confidence != null && f.properties.confidence < 0.5; }).length;
-  var cf = s.class_fraction || {};
+  var nB = state.buildings.features.length, nF = nFilled();
+  var lcf = s.land_cover_fraction, cf = s.class_fraction || {};
+  var done = total - counts.draft;
+
   var html = '<div><h3 class="panel-title">' + esc(m.name) + '</h3>' +
-    '<div class="note">' + esc(m.source) + '</div>' +
-    '<div class="btn-row" style="margin-top:8px;gap:6px">' +
-    '<span class="tag">' + esc(m.crs) + '</span><span class="tag">GSD ' + fmt(m.gsd_m * 100, 0) + ' cm</span>' +
-    (m.used_height ? '<span class="tag ok">ORI + DSM/DTM</span>' : '<span class="tag warn">ORI only (no DSM)</span>') + '</div></div>';
+    '<div class="how">The steps along the top of the map follow the pipeline: <b>image → buildings → land cover → parcels → review</b>. Click a card below to jump to its step.</div></div>';
 
-  html += '<div class="stat-grid">' +
-    tile(feats.length, 'Parcels delineated') + tile(state.buildings.features.length, 'Building footprints' + (s.buildings_filled ? ' (' + s.buildings_filled + ' filled in from land cover)' : '')) +
-    tile(fmt(s.corridor_length_m, 0) + ' m', 'Access corridors') + tile(fmt(s.narrow_lane_length_m, 0) + ' m', 'Narrow lanes (< 3 m)') +
-    '</div>';
+  html += '<div><h3 class="panel-title">What the AI found</h3><div class="found">' +
+    foundCard('buildings', 'border:2px solid ' + PALETTE.building, nB, 'buildings',
+      nF ? (nB - nF) + ' from the roof model · ' + nF + ' filled in from land cover (check)' : 'outlined by the roof model') +
+    (lcf ? foundCard('landcover', 'background:conic-gradient(' + PALETTE.building + ' 0 33%,' + PALETTE.tree + ' 0 66%,' + PALETTE.road + ' 0)', '8', 'land cover classes',
+      'mostly ' + topLandCover(3)) : '') +
+    foundCard('parcels', 'background:' + PALETTE.open + ';border:1px solid #F2E9DC', feats.length, 'parcels',
+      'house + wall + courtyard as one numbered plot') +
+    foundCard('parcels', 'background:rgba(232,232,232,0.3);border:1px dashed ' + PALETTE.road, fmt(s.corridor_length_m, 0) + ' m', 'roads & lanes',
+      fmt(s.narrow_lane_length_m, 0) + ' m narrower than 3 m') +
+    foundCard('review', 'background:' + STATUS.approved.color, Math.round(100 * done / total) + '%', 'reviewed',
+      lowConf ? lowConf + ' low-confidence parcels to check first' : 'no low-confidence parcels') +
+    '</div><div class="btn-row" style="margin-top:10px"><button class="btn primary" data-act="next">Start reviewing, least certain first</button></div></div>';
 
-  html += '<div><h3 class="panel-title">Review progress <span class="note">' + Math.round(100 * (total - counts.draft) / total) + '% done</span></h3>' +
+  html += '<div><h3 class="panel-title">' + (lcf ? 'Land cover' : 'AI classes') + '</h3>' +
+    (lcf ? LC8.map(function (c) {
+      var v = lcf[c[0]] || 0;
+      return '<div class="class-row"><span>' + sw('background:' + c[2]) + esc(c[1]) + '</span><div class="bar"><span style="width:' + (100 * v) + '%;background:' + c[2] + '"></span></div><span class="pct">' + Math.round(100 * v) + '%</span></div>';
+    }).join('') : CLASS_META.map(function (c) {
+      var v = cf[c[0]] || 0;
+      return '<div class="class-row"><span>' + sw('background:' + c[2]) + esc(c[1]) + '</span><div class="bar"><span style="width:' + (100 * v) + '%;background:' + c[2] + '"></span></div><span class="pct">' + Math.round(100 * v) + '%</span></div>';
+    }).join('')) + '</div>';
+
+  html += '<div><h3 class="panel-title">Review progress <span class="note">' + done + ' of ' + feats.length + '</span></h3>' +
     '<div class="progress">' + ['approved', 'field_check', 'rejected'].map(function (k) {
       return '<span style="width:' + (100 * counts[k] / total) + '%;background:' + STATUS[k].color + '"></span>';
     }).join('') + '</div>' +
     '<div class="btn-row" style="margin-top:8px;gap:6px">' + Object.keys(STATUS).map(function (k) {
       return '<span class="tag"><span class="status-dot" style="display:inline-block;background:' + STATUS[k].color + ';margin-right:5px;width:7px;height:7px"></span>' + STATUS[k].label + ' ' + counts[k] + '</span>';
-    }).join('') + '</div>' +
-    '<div class="btn-row" style="margin-top:10px"><button class="btn primary" data-act="next">Start reviewing lowest-confidence parcels</button></div>' +
-    (lowConf ? '<div class="note" style="margin-top:6px">' + lowConf + ' parcel(s) below 0.5 confidence — prioritise these for field verification.</div>' : '') +
-    '</div>';
+    }).join('') + '</div></div>';
 
-  var lcf = s.land_cover_fraction;
-  html += '<div><h3 class="panel-title">' + (lcf ? 'Land cover (AI, 8 classes)' : 'AI segmentation') + '</h3>' +
-    (lcf ? LC8.map(function (c) {
-      var v = lcf[c[0]] || 0;
-      return '<div class="class-row"><span>' + esc(c[0]) + '</span><div class="bar"><span style="width:' + (100 * v) + '%;background:' + c[1] + ';border:1px solid #555"></span></div><span class="pct">' + Math.round(100 * v) + '%</span></div>';
-    }).join('') : CLASS_META.map(function (c) {
-      var v = cf[c[0]] || 0;
-      return '<div class="class-row"><span>' + c[1] + '</span><div class="bar"><span style="width:' + (100 * v) + '%;background:' + c[2] + '"></span></div><span class="pct">' + Math.round(100 * v) + '%</span></div>';
-    }).join('')) +
-    '<div class="note" style="margin-top:8px"><b>Model:</b> ' + esc((m.model && m.model.name) || '—') +
+  html += '<details class="about"><summary>About this survey and the models</summary>' +
+    '<div class="note" style="margin-top:8px">' + esc(m.source) + '</div>' +
+    '<div class="btn-row" style="margin-top:8px;gap:6px">' +
+    '<span class="tag">' + esc(m.crs) + '</span><span class="tag">' + fmt(m.gsd_m * 100, 0) + ' cm / pixel</span>' +
+    (m.used_height ? '<span class="tag ok">Image + height (DSM/DTM)</span>' : '<span class="tag warn">Image only, no height</span>') + '</div>' +
+    '<div class="note" style="margin-top:8px"><b>Models:</b> ' + esc((m.model && m.model.name) || '—') +
     (m.model && m.model.summary ? '<br>' + esc(m.model.summary) : '') +
-    (m.model && m.model.limits ? '<br><b>Known limits:</b> ' + esc(m.model.limits) : '') + '</div></div>';
+    (m.model && m.model.limits ? '<br><b>Known limits:</b> ' + esc(m.model.limits) : '') + '</div></details>';
   return html;
+}
+
+function foundCard(view, swatch, num, what, sub) {
+  return '<button class="found-card" data-view="' + view + '">' + sw(swatch) +
+    '<span class="fc-main"><b>' + esc(num) + '</b> ' + esc(what) + '<small>' + esc(sub) + '</small></span><span class="fc-go">→</span></button>';
 }
 
 function tile(num, label) {
@@ -606,8 +757,8 @@ function landCoverBreakdown(p) {
   var rows = LC8.filter(function (c) { return lc[c[0]]; }).sort(function (a, b) { return lc[b[0]] - lc[a[0]]; });
   return '<div style="margin-top:10px"><div class="sub" style="margin-bottom:4px">Land cover inside this parcel</div>' +
     rows.map(function (c) {
-      return '<div class="class-row" style="grid-template-columns:120px 1fr 44px"><span>' + esc(c[0]) + '</span>' +
-        '<div class="bar"><span style="width:' + lc[c[0]] + '%;background:' + c[1] + ';border:1px solid #555"></span></div>' +
+      return '<div class="class-row"><span>' + sw('background:' + c[2]) + esc(c[1]) + '</span>' +
+        '<div class="bar"><span style="width:' + lc[c[0]] + '%;background:' + c[2] + '"></span></div>' +
         '<span class="pct">' + fmt(lc[c[0]], 0) + '%</span></div>';
     }).join('') + '</div>';
 }
@@ -689,10 +840,13 @@ function wireTab(body) {
       restyle();
     });
   });
+  body.querySelectorAll('.found-card').forEach(function (el) {
+    el.addEventListener('click', function () { setView(el.dataset.view); });
+  });
   body.querySelectorAll('[data-act]').forEach(function (el) {
     el.addEventListener('click', function () {
       var act = el.dataset.act;
-      if (act === 'next') { state.tab = 'review'; state.reviewFilter = 'draft'; nextToReview(); }
+      if (act === 'next') { if (!state.on.parcels) setView('review'); state.tab = 'review'; state.reviewFilter = 'draft'; nextToReview(); }
       else if (act === 'autofix') doAutoFix();
       else if (act === 'merge') doMerge();
       else if (act === 'clear') { state.selected = []; restyle(); renderTabs(); }
@@ -722,13 +876,6 @@ window.WB = {
 // ---------------------------------------------------------------- wiring
 document.querySelectorAll('.tabs button').forEach(function (b) {
   b.addEventListener('click', function () { state.tab = b.dataset.tab; renderTabs(); });
-});
-document.querySelectorAll('#colourMode button').forEach(function (b) {
-  b.addEventListener('click', function () {
-    state.colourMode = b.dataset.mode;
-    document.querySelectorAll('#colourMode button').forEach(function (x) { x.classList.toggle('active', x === b); });
-    restyle();
-  });
 });
 document.querySelectorAll('.map-toolbar button').forEach(function (b) {
   b.addEventListener('click', function () {

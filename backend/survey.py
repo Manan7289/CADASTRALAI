@@ -31,10 +31,12 @@ import topology
 
 SURVEYS_DIR = Path(__file__).resolve().parent.parent / "data" / "surveys"
 DISPLAY_MAX_PX = 2400
-CLASS_COLOURS = {0: (200, 90, 90), 1: (70, 110, 230), 2: (225, 225, 225), 3: (130, 215, 200), 4: (40, 160, 70)}
-# 8-class land cover layer (same colours as the land-cover model's training figures)
-LANDCOVER_COLOURS = {1: (128, 0, 0), 2: (0, 255, 36), 3: (148, 148, 148), 4: (255, 255, 255), 5: (34, 97, 38),
-                     6: (0, 69, 255), 7: (75, 181, 73), 8: (222, 31, 7)}
+# one palette for every layer and chart (frontend/workbench.js PALETTE): a colour means the same thing everywhere
+PALETTE = {"building": (255, 107, 74), "road": (232, 232, 232), "paved": (150, 150, 150), "tree": (46, 139, 62),
+           "grass": (143, 209, 106), "agriculture": (201, 214, 91), "bare": (200, 149, 90), "water": (58, 134, 255)}
+CLASS_COLOURS = {0: PALETTE["paved"], 1: PALETTE["building"], 2: PALETTE["road"], 3: PALETTE["grass"], 4: PALETTE["tree"]}
+LANDCOVER_COLOURS = {1: PALETTE["bare"], 2: PALETTE["grass"], 3: PALETTE["paved"], 4: PALETTE["road"], 5: PALETTE["tree"],
+                     6: PALETTE["water"], 7: PALETTE["agriculture"], 8: PALETTE["building"]}
 HEIGHT_DISPLAY_MIN_M = 1.0  # below this the nDSM is mostly ground noise; not drawn
 STATUSES = ("draft", "approved", "rejected", "field_check")
 
