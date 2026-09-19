@@ -37,6 +37,8 @@ from skimage.morphology import disk, remove_small_objects, remove_small_holes, s
 from skimage.segmentation import watershed
 from skimage.filters import sobel
 
+from topology import clean_polygon
+
 CLS = {"clutter": 0, "building": 1, "road": 2, "low_veg": 3, "tree": 4}
 # 8-class land cover (land cover v2, OpenEarthMap classes); index 0 is unused
 LANDCOVER8 = {1: "bare land", 2: "grass / scrub", 3: "paved / developed", 4: "road", 5: "tree",
@@ -45,6 +47,8 @@ LANDCOVER8 = {1: "bare land", 2: "grass / scrub", 3: "paved / developed", 4: "ro
 MIN_CORRIDOR_M2 = 60       # paved blobs smaller than this are yards/courtyards, not access corridors
 MIN_CORRIDOR_ELONGATION = 3.0   # skeleton length / mean width
 MIN_CORRIDOR_LENGTH_M = 10
+MIN_LANE_PIECE_M2 = 150     # a road/lane fragment cut off from the rest and smaller than this goes to its plot
+PAVED_LOT_MIN_WIDTH_M = 10   # paved ground at least this wide all round is a lot / plaza, not a lane
 MIN_BUILDING_M2 = 12
 MIN_BLOCK_M2 = 30
 NARROW_LANE_M = 3.0        # below this a corridor is a narrow access lane (PS: "narrow access roads")
@@ -68,11 +72,21 @@ def _px_area(transform):
     return abs(transform.a * transform.e)
 
 
-def corridor_mask(labels, px_m2, gsd):
+def corridor_mask(labels, px_m2, gsd, paved=None):
     """Keep paved regions that are strip-like: their skeleton is long relative
     to their typical width (a road cross or lane network qualifies at any size;
-    a square courtyard does not)."""
-    road = ndi.binary_opening(labels == CLS["road"], iterations=1)
+    a square courtyard does not).
+
+    paved: optional mask of paved ground that is not labelled road. Land cover often
+    calls inner colony lanes "paved" rather than "road", so these join the network;
+    paved parts wider than a lane (parking lots, plazas) are left out."""
+    road = labels == CLS["road"]
+    if paved is not None:
+        both = road | paved
+        r = max(1, int(round(PAVED_LOT_MIN_WIDTH_M / gsd / 2)))
+        wide = ndi.binary_opening(both, structure=np.hypot(*np.mgrid[-r:r + 1, -r:r + 1]) <= r)
+        road = road | (paved & ~wide)
+    road = ndi.binary_opening(road, iterations=1)
     lab, n = ndi.label(road)
     keep = np.zeros(n + 1, dtype=bool)
     sizes = ndi.sum(road, lab, index=np.arange(n + 1)) * px_m2
@@ -309,13 +323,36 @@ def fill_unassigned(label_raster, valid):
     return out
 
 
-def merge_detached_pieces(label_raster):
+def _absorb_small_pieces(out, lab_id, sl, min_px):
+    """Pieces of lab_id smaller than min_px go to the neighbour they share the most border with."""
+    sl = tuple(slice(max(0, s.start - 1), s.stop + 1) for s in sl)
+    comps, n = ndi.label(out[sl] == lab_id)
+    sizes = np.bincount(comps.ravel())
+    for c in range(1, n + 1):
+        if sizes[c] >= min_px:
+            continue
+        piece = comps == c
+        ring = ndi.binary_dilation(piece) & ~piece
+        nb = out[sl][ring]
+        nb = nb[(nb != lab_id) & (nb > 0)]
+        if nb.size:
+            out[sl][piece] = np.bincount(nb).argmax()
+
+
+def merge_detached_pieces(label_raster, keep_multipart=None, min_piece_px=0):
     """Each label keeps only its largest connected piece; every other piece is
     relabelled to the neighbouring label it shares the longest border with, so
-    no parcel ends up as a multipart polygon."""
+    no parcel ends up as a multipart polygon.
+
+    keep_multipart: a label that may stay in pieces (the road/lane network is
+    broken up by tree canopy and parked cars, and its pieces are still roads);
+    only its fragments too short to be a lane are handed to neighbours."""
     out = label_raster.copy()
     for lab_id, sl in enumerate(ndi.find_objects(out), start=1):
         if sl is None:
+            continue
+        if lab_id == keep_multipart:
+            _absorb_small_pieces(out, lab_id, sl, min_px=min_piece_px)
             continue
         sl = tuple(slice(max(0, s.start - 1), s.stop + 1) for s in sl)
         region = out[sl] == lab_id
@@ -390,7 +427,8 @@ def _parcel_landcover_label(built, shares):
             "road": "Paved / developed open land", "water": "Water"}.get(top, "Open / vacant land")
 
 
-def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None, inst_fill=None):
+def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None, inst_fill=None,
+            paved=None):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
     geometries) plus summary stats.
@@ -400,14 +438,15 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     landcover: optional (H,W) 8-class land-cover raster (LANDCOVER8); adds a
     per-parcel land-cover breakdown and finer parcel land-use labels.
     inst_fill: optional (H,W) bool mask of houses in inst_override that were filled in
-    from the land-cover building map (roof_fill.py); those footprints are tagged for review."""
+    from the land-cover building map (roof_fill.py); those footprints are tagged for review.
+    paved: optional (H,W) bool mask of paved non-road ground; lane-shaped parts join the corridors."""
     gsd = abs(transform.a)
     px_m2 = _px_area(transform)
     labels = probs.argmax(0).astype(np.uint8)
     maxp = probs.max(0)
 
     edges = edge_strength(rgb, ndsm)
-    corridors = corridor_mask(labels, px_m2, gsd)
+    corridors = corridor_mask(labels, px_m2, gsd, paved)
     inst = building_instances(labels, edges, gsd, px_m2) if inst_override is None else instances_from_raster(inst_override, px_m2)
     parcels = parcel_raster(corridors, inst, edges, labels, px_m2, gsd)
 
@@ -421,7 +460,9 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     # detached-piece merging can create new enclosures and vice versa, so settle both
     for _ in range(3):
         before = cover
-        cover = merge_detached_pieces(resolve_enclosures(merge_detached_pieces(cover), corridor_id, px_m2))
+        lane_px = int(MIN_LANE_PIECE_M2 / px_m2)
+        cover = merge_detached_pieces(resolve_enclosures(merge_detached_pieces(cover, corridor_id, lane_px), corridor_id, px_m2),
+                                      corridor_id, lane_px)
         if np.array_equal(before, cover):
             break
     parcels = np.where(cover == corridor_id, 0, cover)
@@ -429,7 +470,8 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     corr = corridor_attributes(corridors, gsd)
     cover_polys = vectorise(cover, transform)
     corridor_polys = {1: cover_polys.pop(corridor_id)} if corridor_id in cover_polys else {}
-    parcel_polys = cover_polys
+    # coverage simplification can pinch a plot into a figure-8; keep it one valid polygon
+    parcel_polys = {k: (g if g.is_valid else clean_polygon(g)) for k, g in cover_polys.items()}
     building_polys = {k: regularise_building(g) for k, g in vectorise(inst, transform).items()}
 
     # per-parcel stats straight from the rasters
