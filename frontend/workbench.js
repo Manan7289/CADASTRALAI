@@ -9,8 +9,12 @@ var STATUS = {
   rejected:    {label: 'Rejected',    color: '#E2685F'}
 };
 var LANDCOVER = {
-  'Built-up': '#7C9BA6', 'Vegetated open land': '#5FA37A', 'Open / vacant land': '#B08D6B'
+  'Built-up': '#7C9BA6', 'Vegetated open land': '#5FA37A', 'Open / vacant land': '#B08D6B',
+  'Barren land': '#8B3A3A', 'Paved / developed open land': '#9A9A9A', 'Water': '#2F6FE0'
 };
+// 8-class land-cover layer (land cover v2); same colours as landcover.png from the backend
+var LC8 = [['building', '#DE1F07'], ['road', '#FFFFFF'], ['tree', '#226126'], ['grass / scrub', '#00FF24'],
+           ['agriculture', '#4BB549'], ['bare land', '#800000'], ['water', '#0045FF'], ['paved / developed', '#949494']];
 var CLASS_META = [
   ['building', 'Building', '#4666E6'], ['road', 'Road / paved', '#E1E1E1'],
   ['low_veg', 'Low vegetation', '#82D7C8'], ['tree', 'Tree', '#28A046'], ['clutter', 'Other / clutter', '#C85A5A']
@@ -143,6 +147,7 @@ function updateLabelVisibility() {
   else map.removeLayer(labelLayer);
 }
 map.on('zoomend overlayadd overlayremove', updateLabelVisibility);
+map.on('overlayadd overlayremove', function () { renderLegend(); });
 
 function buildIssueLayer() {
   if (issueLayer) map.removeLayer(issueLayer);
@@ -181,6 +186,11 @@ function renderLegend() {
     }).join('');
   }
   html += '<div style="margin-top:4px"><span class="sw" style="background:transparent;border:2px solid #E2685F"></span>Has topology issue</div>';
+  if (overlays.landcover && map.hasLayer(overlays.landcover)) {
+    html += '<div style="margin-top:8px"><b>Land cover layer</b>' + LC8.map(function (c) {
+      return '<div><span class="sw" style="background:' + c[1] + ';border:1px solid #555"></span>' + esc(c[0]) + '</div>';
+    }).join('') + '</div>';
+  }
   $('mapLegend').innerHTML = html;
 }
 
@@ -231,6 +241,7 @@ function openSurvey(sid) {
     ).addTo(map);
     overlays.classes = L.imageOverlay(base + 'classes.png', b, {opacity: 0.55});
     if (state.meta.has_height_layer) overlays.height = L.imageOverlay(base + 'height.png', b, {opacity: 0.6});
+    if (state.meta.has_landcover_layer) overlays.landcover = L.imageOverlay(base + 'landcover.png', b, {opacity: 0.55});
     buildingLayer = L.geoJSON(state.buildings, {interactive: false, pmIgnore: true, style: {color: '#6E8BFF', weight: 1, fillOpacity: 0.12}});
     corridorLayer = L.geoJSON(state.corridors, {interactive: false, pmIgnore: true, style: {color: '#E7EEE9', weight: 1, dashArray: '3 3', fillColor: '#E7EEE9', fillOpacity: 0.18}});
     overlays.buildings = buildingLayer;
@@ -240,6 +251,7 @@ function openSurvey(sid) {
 
     var ctl = {'Orthoimage (ORI)': overlays.ori, 'AI segmentation': overlays.classes};
     if (overlays.height) ctl['Height above ground (nDSM)'] = overlays.height;
+    if (overlays.landcover) ctl['Land cover (roads, vegetation, bare land…)'] = overlays.landcover;
     ctl['Access corridors'] = corridorLayer;
     ctl['Building footprints'] = buildingLayer;
     ctl['Parcels'] = parcelLayer;
@@ -495,10 +507,15 @@ function overviewHtml() {
     (lowConf ? '<div class="note" style="margin-top:6px">' + lowConf + ' parcel(s) below 0.5 confidence — prioritise these for field verification.</div>' : '') +
     '</div>';
 
-  html += '<div><h3 class="panel-title">AI segmentation</h3>' + CLASS_META.map(function (c) {
-    var v = cf[c[0]] || 0;
-    return '<div class="class-row"><span>' + c[1] + '</span><div class="bar"><span style="width:' + (100 * v) + '%;background:' + c[2] + '"></span></div><span class="pct">' + Math.round(100 * v) + '%</span></div>';
-  }).join('') +
+  var lcf = s.land_cover_fraction;
+  html += '<div><h3 class="panel-title">' + (lcf ? 'Land cover (AI, 8 classes)' : 'AI segmentation') + '</h3>' +
+    (lcf ? LC8.map(function (c) {
+      var v = lcf[c[0]] || 0;
+      return '<div class="class-row"><span>' + esc(c[0]) + '</span><div class="bar"><span style="width:' + (100 * v) + '%;background:' + c[1] + ';border:1px solid #555"></span></div><span class="pct">' + Math.round(100 * v) + '%</span></div>';
+    }).join('') : CLASS_META.map(function (c) {
+      var v = cf[c[0]] || 0;
+      return '<div class="class-row"><span>' + c[1] + '</span><div class="bar"><span style="width:' + (100 * v) + '%;background:' + c[2] + '"></span></div><span class="pct">' + Math.round(100 * v) + '%</span></div>';
+    }).join('')) +
     '<div class="note" style="margin-top:8px"><b>Model:</b> ' + esc((m.model && m.model.name) || '—') +
     (m.model && m.model.summary ? '<br>' + esc(m.model.summary) : '') +
     (m.model && m.model.limits ? '<br><b>Known limits:</b> ' + esc(m.model.limits) : '') + '</div></div>';
@@ -555,7 +572,7 @@ function parcelDetailHtml(f) {
     kv('Land cover', p.landcover || '—') + kv('Built-up', p.built_pct == null ? '—' : fmt(p.built_pct, 0) + '%') +
     kv('Road frontage', p.road_frontage == null ? '—' : (p.road_frontage ? 'Yes' : 'No — check access')) +
     kv('Vegetation', p.veg_pct == null ? '—' : fmt(p.veg_pct, 0) + '%') +
-    '</div>' +
+    '</div>' + landCoverBreakdown(p) +
     '<div style="margin-top:12px"><div class="class-row" style="grid-template-columns:110px 1fr 44px"><span>AI confidence</span>' +
     '<div class="bar"><span style="width:' + (100 * (conf || 0)) + '%;background:' + confColour(conf) + '"></span></div><span class="pct">' + (conf == null ? '—' : conf.toFixed(2)) + '</span></div>' +
     '<div class="note">' + confidenceNote(p) + '</div></div>' +
@@ -563,6 +580,18 @@ function parcelDetailHtml(f) {
     statusButtons() +
     '<div class="btn-row" style="margin-top:8px"><button class="btn" data-act="edit">Edit boundary</button><button class="btn" data-act="zoom">Zoom to</button></div>' +
     '<div id="parcelExtras"></div></div>';
+}
+
+function landCoverBreakdown(p) {
+  var lc = p.land_cover_pct;
+  if (!lc) return '';
+  var rows = LC8.filter(function (c) { return lc[c[0]]; }).sort(function (a, b) { return lc[b[0]] - lc[a[0]]; });
+  return '<div style="margin-top:10px"><div class="sub" style="margin-bottom:4px">Land cover inside this parcel</div>' +
+    rows.map(function (c) {
+      return '<div class="class-row" style="grid-template-columns:120px 1fr 44px"><span>' + esc(c[0]) + '</span>' +
+        '<div class="bar"><span style="width:' + lc[c[0]] + '%;background:' + c[1] + ';border:1px solid #555"></span></div>' +
+        '<span class="pct">' + fmt(lc[c[0]], 0) + '%</span></div>';
+    }).join('') + '</div>';
 }
 
 function confidenceNote(p) {

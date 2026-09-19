@@ -38,6 +38,9 @@ from skimage.segmentation import watershed
 from skimage.filters import sobel
 
 CLS = {"clutter": 0, "building": 1, "road": 2, "low_veg": 3, "tree": 4}
+# 8-class land cover (land cover v2, OpenEarthMap classes); index 0 is unused
+LANDCOVER8 = {1: "bare land", 2: "grass / scrub", 3: "paved / developed", 4: "road", 5: "tree",
+              6: "water", 7: "agriculture", 8: "building"}
 
 MIN_CORRIDOR_M2 = 60       # paved blobs smaller than this are yards/courtyards, not access corridors
 MIN_CORRIDOR_ELONGATION = 3.0   # skeleton length / mean width
@@ -361,10 +364,41 @@ def parcel_confidence(geom, seg_conf, boundary_support):
     return round(float(base * plaus), 3), reasons
 
 
-def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
+def instances_from_raster(inst, px_m2):
+    """Roof instances supplied by a separate roof model (e.g. the stacked Mask R-CNN):
+    relabel 1..n and drop fragments too small to be a structure."""
+    inst = np.asarray(inst, dtype=np.int32).copy()
+    sizes = np.bincount(inst.ravel())
+    small = np.where(sizes * px_m2 < MIN_BUILDING_M2)[0]
+    inst[np.isin(inst, small[small > 0])] = 0
+    ids = np.unique(inst[inst > 0])
+    remap = np.zeros(int(inst.max()) + 1, np.int32)
+    remap[ids] = np.arange(1, len(ids) + 1)
+    return remap[inst]
+
+
+def _parcel_landcover_label(built, shares):
+    """Dominant use of a parcel from the 8-class land cover (built-up first)."""
+    if built >= 0.35:
+        return "Built-up"
+    open_shares = {k: v for k, v in shares.items() if k != "building"}
+    if not open_shares or max(open_shares.values()) < 0.2:
+        return "Open / vacant land"
+    top = max(open_shares, key=open_shares.get)
+    return {"bare land": "Barren land", "grass / scrub": "Vegetated open land", "tree": "Vegetated open land",
+            "agriculture": "Vegetated open land", "paved / developed": "Paved / developed open land",
+            "road": "Paved / developed open land", "water": "Water"}.get(top, "Open / vacant land")
+
+
+def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
-    geometries) plus summary stats."""
+    geometries) plus summary stats.
+
+    inst_override: optional (H,W) roof-instance raster from a dedicated roof model;
+    used instead of splitting the segmentation's building class.
+    landcover: optional (H,W) 8-class land-cover raster (LANDCOVER8); adds a
+    per-parcel land-cover breakdown and finer parcel land-use labels."""
     gsd = abs(transform.a)
     px_m2 = _px_area(transform)
     labels = probs.argmax(0).astype(np.uint8)
@@ -372,7 +406,7 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
 
     edges = edge_strength(rgb, ndsm)
     corridors = corridor_mask(labels, px_m2, gsd)
-    inst = building_instances(labels, edges, gsd, px_m2)
+    inst = building_instances(labels, edges, gsd, px_m2) if inst_override is None else instances_from_raster(inst_override, px_m2)
     parcels = parcel_raster(corridors, inst, edges, labels, px_m2, gsd)
 
     # only nodata connected to the image edge is outside the survey; black pixels inside it (deep shadow) are not
@@ -408,6 +442,12 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
     touches_corr = ndi.binary_dilation(corridors, iterations=max(1, int(1.0 / gsd)))
     frontage = np.bincount(parcels[touches_corr & (parcels > 0)], minlength=len(idx)) > 0
 
+    lc_counts = None
+    if landcover is not None:
+        lc = np.asarray(landcover, dtype=np.int64)
+        lc_counts = np.zeros((len(idx), 9))
+        np.add.at(lc_counts, (parcels.ravel(), np.clip(lc.ravel(), 0, 8)), 1)
+
     parcel_features = []
     for pid, geom in parcel_polys.items():
         if geom.is_empty:
@@ -418,11 +458,18 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
         boundary_support = min(1.0, 2 * edge_on_boundary[pid] / max(boundary_px[pid], 1))
         confidence, reasons = parcel_confidence(geom, seg_conf, boundary_support)
         cover = "Built-up" if built >= 0.35 else ("Vegetated open land" if veg >= 0.5 else "Open / vacant land")
-        parcel_features.append({
+        feat = {
             "id": pid, "geometry": geom, "area_m2": round(geom.area, 1), "perimeter_m": round(geom.length, 1),
             "built_pct": round(float(100 * built), 1), "veg_pct": round(float(100 * veg), 1), "landcover": cover,
             "road_frontage": bool(frontage[pid]), "confidence": confidence, "confidence_notes": reasons,
-        })
+        }
+        if lc_counts is not None:
+            tot = max(lc_counts[pid, 1:].sum(), 1)
+            shares = {LANDCOVER8[k]: lc_counts[pid, k] / tot for k in LANDCOVER8}
+            feat["land_cover_pct"] = {k: round(100 * v, 1) for k, v in shares.items() if v >= 0.01}
+            feat["landcover"] = _parcel_landcover_label(built, shares)
+            feat["veg_pct"] = round(100 * (shares["tree"] + shares["grass / scrub"] + shares["agriculture"]), 1)
+        parcel_features.append(feat)
 
     building_features = [{"id": bid, "geometry": g, "area_m2": round(g.area, 1)}
                          for bid, g in building_polys.items() if not g.is_empty]
@@ -438,6 +485,9 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None):
         "class_fraction": {k: round(float((labels == v).mean()), 3) for k, v in CLS.items()},
         "used_height": ndsm is not None,
     }
+    if landcover is not None:
+        lcv = np.asarray(landcover)[valid]
+        stats["land_cover_fraction"] = {name: round(float((lcv == k).mean()), 3) for k, name in LANDCOVER8.items()}
     return {"parcels": parcel_features, "buildings": building_features, "corridors": corridor_features,
             "stats": stats, "rasters": {"labels": labels, "parcels": parcels, "corridors": corridors,
                                         "buildings": inst, "edges": edges, "skeleton": corr["skeleton"]}}

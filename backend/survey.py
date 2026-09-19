@@ -32,6 +32,9 @@ import topology
 SURVEYS_DIR = Path(__file__).resolve().parent.parent / "data" / "surveys"
 DISPLAY_MAX_PX = 2400
 CLASS_COLOURS = {0: (200, 90, 90), 1: (70, 110, 230), 2: (225, 225, 225), 3: (130, 215, 200), 4: (40, 160, 70)}
+# 8-class land cover layer (same colours as the land-cover model's training figures)
+LANDCOVER_COLOURS = {1: (128, 0, 0), 2: (0, 255, 36), 3: (148, 148, 148), 4: (255, 255, 255), 5: (34, 97, 38),
+                     6: (0, 69, 255), 7: (75, 181, 73), 8: (222, 31, 7)}
 HEIGHT_DISPLAY_MIN_M = 1.0  # below this the nDSM is mostly ground noise; not drawn
 STATUSES = ("draft", "approved", "rejected", "field_check")
 
@@ -132,9 +135,10 @@ def _geom_to_ll(geom, transformer):
     return shp_transform(transformer.transform, geom)
 
 
-def create(name, source, loaded, probs, extracted, model_info):
+def create(name, source, loaded, probs, extracted, model_info, landcover=None):
     """loaded: segment.load_survey() dict; probs: model output; extracted:
-    parcel_extract.extract() output. Writes the survey folder, returns meta."""
+    parcel_extract.extract() output; landcover: optional 8-class land-cover raster
+    on the same grid. Writes the survey folder, returns meta."""
     sid = time.strftime("%Y%m%d") + "-" + uuid.uuid4().hex[:6]
     d = SURVEYS_DIR / sid
     d.mkdir(parents=True, exist_ok=True)
@@ -153,6 +157,14 @@ def create(name, source, loaded, probs, extracted, model_info):
     cls_rgb[~valid, 3] = 0
     cls_img, _ = _to_display(cls_rgb, crs, transform, Resampling.nearest)
     Image.fromarray(cls_img, "RGBA").save(d / "classes.png", optimize=True)
+
+    if landcover is not None:
+        lc_rgb = np.zeros(landcover.shape + (4,), np.uint8)
+        for k, col in LANDCOVER_COLOURS.items():
+            lc_rgb[landcover == k] = col + (255,)
+        lc_rgb[~valid, 3] = 0
+        lc_img, _ = _to_display(lc_rgb, crs, transform, Resampling.nearest)
+        Image.fromarray(lc_img, "RGBA").save(d / "landcover.png", optimize=True)
 
     if loaded.get("ndsm") is not None:
         h = np.clip(loaded["ndsm"] / 15.0, 0, 1)
@@ -179,6 +191,7 @@ def create(name, source, loaded, probs, extracted, model_info):
         "id": sid, "name": name, "source": source, "created": time.strftime("%Y-%m-%d %H:%M"),
         "crs": crs.to_string(), "gsd_m": extracted["stats"]["gsd_m"], "bounds": bounds,
         "used_height": loaded.get("ndsm") is not None, "has_height_layer": (d / "height.png").exists(),
+        "has_landcover_layer": (d / "landcover.png").exists(),
         "tiles": tiles,
         "model": model_info, "stats": extracted["stats"],
     }
