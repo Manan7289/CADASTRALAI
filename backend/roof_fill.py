@@ -18,7 +18,10 @@ from skimage.feature import peak_local_max
 MIN_FILL_M2 = 20          # smaller pieces are usually noise or a roof-model edge sliver
 SLIVER_WIDTH_M = 2.0      # land-cover edges hugging an existing roof are removed by opening this wide
 GAP_M = 0.6               # keep this much gap to roofs the model already drew
-HOUSE_SPACING_M = 5.0     # min distance between two house centres when splitting a block
+NECK_M = 1.0              # a lone blob is split only where it narrows by this much (half-width) between two humps
+ROW_CONTEXT_M = 40        # a blob with roof-model houses within this distance...
+ROW_CONTEXT_HOUSES = 3    # ...at least this many, is a row of touching houses: split into house widths
+HOUSE_W_DEFAULT_M = 10
 MIN_SOLIDITY = 0.75       # area / convex-hull area; ragged blobs are not structures (a hull, not the
                           # grid-aligned box, so buildings on diagonal streets are not thrown away)
 MIN_WIDTH_M = 3.5         # a house is at least this wide; thinner pieces are gaps between roofs
@@ -38,15 +41,35 @@ def fill_missed_roofs(roofs, building_prob, valid, gsd, thresh=0.5):
 
     dist = ndi.distance_transform_edt(cand)
     comps, _ = ndi.label(cand)
-    peaks = peak_local_max(dist, min_distance=max(2, int(HOUSE_SPACING_M / gsd / 2)),
-                           threshold_abs=1.5 / gsd / 2, labels=comps, exclude_border=False)
+    # Seeds. A blob among houses the roof model already found (a row of touching houses the land
+    # cover sees as one) is split into house-width pieces, the width taken from those houses. A blob
+    # with no such neighbours (a metro station, a mall, an apartment block) is one building unless
+    # it narrows between two humps by NECK_M.
+    from skimage.morphology import h_maxima
+    humps, _ = ndi.label(h_maxima(dist, max(1.0, NECK_M / gsd)) & cand)
+    widths = [min(sl[0].stop - sl[0].start, sl[1].stop - sl[1].start) for sl in ndi.find_objects(roofs) if sl is not None]
+    house_w = float(np.median(widths)) if len(widths) >= 5 else HOUSE_W_DEFAULT_M / gsd
+    near = _count_near(roofs, int(ROW_CONTEXT_M / gsd))
+    peaks = peak_local_max(dist, min_distance=max(2, int(house_w / 2)), threshold_abs=1.5 / gsd / 2,
+                           labels=comps, exclude_border=False)
+    row_seeds = np.zeros(cand.shape, np.int32)
+    row_seeds[tuple(peaks.T)] = np.arange(1, len(peaks) + 1)
     markers = np.zeros(cand.shape, np.int32)
-    markers[tuple(peaks.T)] = np.arange(1, len(peaks) + 1)
-    # components too small to have a peak still get one seed
+    n = 0
     for c, sl in enumerate(ndi.find_objects(comps), start=1):
-        if sl is not None and not markers[sl][comps[sl] == c].any():
-            ys, xs = np.nonzero(comps[sl] == c)
-            markers[sl[0].start + ys[len(ys) // 2], sl[1].start + xs[len(xs) // 2]] = markers.max() + 1
+        if sl is None:
+            continue
+        m = comps[sl] == c
+        src = row_seeds[sl] if near[sl][m].max() >= ROW_CONTEXT_HOUSES else humps[sl]
+        ids = np.unique(src[m & (src > 0)])
+        if ids.size == 0:
+            ys, xs = np.nonzero(m)
+            n += 1
+            markers[sl[0].start + ys[len(ys) // 2], sl[1].start + xs[len(xs) // 2]] = n
+            continue
+        for v in ids:
+            n += 1
+            markers[sl][m & (src == v)] = n
     pieces = watershed(-dist, markers, mask=cand)
 
     out = roofs.copy()
@@ -69,3 +92,15 @@ def fill_missed_roofs(roofs, building_prob, valid, gsd, thresh=0.5):
 def _hull_area(mask):
     cs, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     return max(cv2.contourArea(cv2.convexHull(np.vstack(cs))), 1.0)
+
+
+def _count_near(roofs, radius_px):
+    """Per pixel: how many distinct roof-model houses have a pixel within radius_px (box window)."""
+    count = np.zeros(roofs.shape, np.int32)
+    for sl in ndi.find_objects(roofs):
+        if sl is None:
+            continue
+        y0, y1 = max(0, sl[0].start - radius_px), sl[0].stop + radius_px
+        x0, x1 = max(0, sl[1].start - radius_px), sl[1].stop + radius_px
+        count[y0:y1, x0:x1] += 1
+    return count

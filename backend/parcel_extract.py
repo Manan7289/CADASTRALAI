@@ -39,7 +39,7 @@ from skimage.filters import sobel
 
 from topology import clean_polygon
 from road_network import WIDTH_CLASSES, bridge_lane_gaps, road_segments
-from plot_layout import KIND_LABEL, layout_parcels
+from plot_layout import KIND_LABEL, layout_parcels, nearest_parcels
 
 CLS = {"clutter": 0, "building": 1, "road": 2, "low_veg": 3, "tree": 4}
 # 8-class land cover (land cover v2, OpenEarthMap classes); index 0 is unused
@@ -157,7 +157,7 @@ def _open_land_seeds(region, gsd):
     return np.where(region, seeds, 0)
 
 
-def parcel_raster(corridors, inst, edges, labels, px_m2, gsd):
+def parcel_raster(corridors, inst, edges, labels, px_m2, gsd, split_open=True):
     """Every land pixel gets exactly one parcel id.
 
     Roofs only claim land within PLOT_REACH_M of their footprint (their own
@@ -195,7 +195,7 @@ def parcel_raster(corridors, inst, edges, labels, px_m2, gsd):
                 area = region.sum() * px_m2
                 if area < MIN_OPEN_PLOT_M2 and len(ids):
                     continue  # small scraps are absorbed by the neighbouring plot below
-                if area <= OPEN_PLOT_MAX_M2:
+                if area <= OPEN_PLOT_MAX_M2 or not split_open:   # open ground (park, maidan) stays whole
                     block_out[region] = next_id
                     next_id += 1
                     continue
@@ -430,7 +430,7 @@ def _parcel_landcover_label(built, shares):
 
 
 def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=None, landcover=None, inst_fill=None,
-            paved=None, building_source="roof model", parcel_method="layout"):
+            paved=None, building_source="roof model", parcel_method="nearest"):
     """probs: (C,H,W) class probabilities; rgb: (H,W,3) uint8; transform maps
     pixel -> projected metres (UTM). Returns dict of feature lists (UTM
     geometries) plus summary stats.
@@ -450,13 +450,16 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     edges = edge_strength(rgb, ndsm)
     corridors = corridor_mask(labels, px_m2, gsd, paved)
     inst = building_instances(labels, edges, gsd, px_m2) if inst_override is None else instances_from_raster(inst_override, px_m2)
-    if parcel_method == "layout":
+    if parcel_method in ("layout", "nearest"):
         # blocks are only right if the lane network is closed: bridge gaps under trees / vehicles
         corridors, _ = bridge_lane_gaps(corridors, ndi.binary_dilation(inst > 0, iterations=2), gsd)
 
     # only nodata connected to the image edge is outside the survey; black pixels inside it (deep shadow) are not
     valid = np.ones(labels.shape, bool) if valid is None else ndi.binary_fill_holes(valid)
-    if parcel_method == "layout":
+    if parcel_method == "nearest":
+        # every piece of land to the nearest house in its block; roads separate (plot_layout.py)
+        parcels, corridors = nearest_parcels(corridors, inst, valid, gsd)
+    elif parcel_method == "layout":
         # blocks from the road network -> rows -> one plot per house, cut along wall lines (plot_layout.py)
         parcels, corridors = layout_parcels(corridors, inst, edges, valid, gsd)
     else:
