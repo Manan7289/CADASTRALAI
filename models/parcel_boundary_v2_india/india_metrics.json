@@ -1,0 +1,55 @@
+{
+  "before": {
+    "precision": 0.446,
+    "recall": 0.549,
+    "f": 0.491
+  },
+  "after": {
+    "precision": 0.509,
+    "recall": 0.636,
+    "f": 0.559
+  },
+  "per_crop_before": [
+    {
+      "crop": "test_HSRLayoutBengaluru_760_640",
+      "precision": 0.252,
+      "recall": 0.376,
+      "f": 0.302
+    },
+    {
+      "crop": "test_SinghNagar_620_560",
+      "precision": 0.55,
+      "recall": 0.638,
+      "f": 0.59
+    },
+    {
+      "crop": "test_VaishaliNagarJaipur_300_40",
+      "precision": 0.535,
+      "recall": 0.634,
+      "f": 0.58
+    }
+  ],
+  "per_crop_after": [
+    {
+      "crop": "test_HSRLayoutBengaluru_760_640",
+      "precision": 0.322,
+      "recall": 0.583,
+      "f": 0.415
+    },
+    {
+      "crop": "test_SinghNagar_620_560",
+      "precision": 0.618,
+      "recall": 0.659,
+      "f": 0.638
+    },
+    {
+      "crop": "test_VaishaliNagarJaipur_300_40",
+      "precision": 0.587,
+      "recall": 0.666,
+      "f": 0.624
+    }
+  ],
+  "steps": 20,
+  "train_crops": 7,
+  "test_crops": 3
+}

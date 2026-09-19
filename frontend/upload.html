@@ -2,44 +2,48 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>CadastraAI — Upload Your Own Area</title>
+<title>CadastraAI — New Survey</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/vendor/leaflet.css">
+<link rel="stylesheet" href="/vendor/leaflet-geoman.css">
 <link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="workbench.css">
 <style>
-  .upload-wrap{max-width:640px;margin:0 auto;padding:40px 24px 80px;}
-  .card{background:var(--surface);border:1px solid var(--border-soft);border-radius:12px;padding:26px 28px;margin-bottom:20px;}
-  .card h2{font-family:var(--font-display);font-weight:800;font-size:1.3rem;text-transform:uppercase;margin:0 0 6px 0;}
-  .card p.sub{color:var(--text-dim);font-size:0.88rem;margin:0 0 20px 0;line-height:1.5;}
-  label.field{display:block;margin-bottom:16px;}
-  label.field span{display:block;font-family:var(--font-mono);font-size:0.68rem;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint);margin-bottom:6px;}
-  label.field small{display:block;font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-faint);font-size:0.76rem;margin-top:4px;}
-  input[type=file], input[type=number], input[type=text]{
-    width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
-    padding:10px 12px;color:var(--text);font-family:var(--font-mono);font-size:0.86rem;
-  }
-  input:focus{outline:2px solid var(--accent);outline-offset:1px;}
-  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-  .submit-btn{
-    width:100%;padding:13px;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);
-    color:var(--accent);font-size:0.9rem;font-weight:600;cursor:pointer;font-family:inherit;
-  }
-  .submit-btn:hover{background:rgba(69,199,184,0.24);}
-  .submit-btn:disabled{opacity:0.5;cursor:not-allowed;}
-  .status-box{
-    margin-top:16px;padding:12px 14px;border-radius:8px;font-size:0.85rem;display:none;
-  }
-  .status-box.show{display:block;}
-  .status-box.working{background:var(--accent-soft);border:1px solid rgba(69,199,184,0.35);color:var(--accent);}
-  .status-box.error{background:rgba(226,104,95,0.1);border:1px solid rgba(226,104,95,0.35);color:var(--critical);}
-  .status-box.done{background:rgba(108,190,129,0.1);border:1px solid rgba(108,190,129,0.35);color:var(--ok);}
-  .status-box a{color:inherit;font-weight:600;}
-  .warn-banner{
-    background:rgba(224,169,74,0.08);border:1px solid rgba(224,169,74,0.35);border-radius:10px;
-    padding:14px 16px;font-size:0.82rem;color:var(--text-dim);margin-bottom:24px;line-height:1.5;
-  }
-  .warn-banner b{color:var(--warning);}
+  body{overflow:auto;}
+  .ns{display:grid;grid-template-columns:440px 1fr;flex:1;min-height:0;}
+  @media (max-width:980px){.ns{grid-template-columns:1fr;grid-template-rows:auto 60vh;}}
+  .ns-side{background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:20px 22px 40px;display:flex;flex-direction:column;gap:18px;}
+  .step{border:1px solid var(--border-soft);border-radius:11px;padding:16px 16px 18px;background:var(--bg-elevated);}
+  .step.off{opacity:0.45;pointer-events:none;}
+  .step h2{font-family:var(--font-display);font-weight:800;font-size:1.05rem;text-transform:uppercase;margin:0 0 4px;display:flex;gap:10px;align-items:center;}
+  .step h2 .n{font-family:var(--font-mono);font-size:0.7rem;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--accent);color:var(--accent);}
+  .step.done h2 .n{background:var(--accent);color:#04211D;}
+  .field{display:block;margin-top:12px;}
+  .field > span{display:block;font-family:var(--font-mono);font-size:0.64rem;letter-spacing:0.05em;text-transform:uppercase;color:var(--text-faint);margin-bottom:5px;}
+  .field small{display:block;color:var(--text-faint);font-size:0.72rem;margin-top:4px;line-height:1.45;}
+  .field input{width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;color:var(--text);font-family:var(--font-mono);font-size:0.8rem;}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+  .hidden{display:none !important;}
+  .uploadbar{height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;margin-top:10px;}
+  .uploadbar span{display:block;height:100%;width:0;background:var(--accent);transition:width .2s;}
+  .stages{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:8px;}
+  .stages li{display:flex;gap:10px;align-items:center;font-size:0.8rem;color:var(--text-faint);}
+  .stages li .ic{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--border);flex:none;}
+  .stages li.now{color:var(--text);}
+  .stages li.now .ic{border-color:var(--accent);border-top-color:transparent;animation:spin .8s linear infinite;}
+  .stages li.ok{color:var(--text-dim);}
+  .stages li.ok .ic{background:var(--ok);border-color:var(--ok);}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @media (prefers-reduced-motion: reduce){.stages li.now .ic{animation:none;}}
+  .msg{margin-top:12px;padding:10px 12px;border-radius:8px;font-size:0.8rem;line-height:1.45;}
+  .msg.err{background:rgba(226,104,95,0.1);border:1px solid rgba(226,104,95,0.4);color:var(--critical);}
+  .msg.ok{background:rgba(108,190,129,0.1);border:1px solid rgba(108,190,129,0.4);color:var(--ok);}
+  .msg.info{background:var(--accent-soft);border:1px solid rgba(69,199,184,0.35);color:var(--text-dim);}
+  .map-hint{position:absolute;top:12px;left:56px;z-index:900;background:rgba(18,26,21,0.92);border:1px solid var(--border);border-radius:9px;padding:8px 12px;font-size:0.76rem;color:var(--text-dim);max-width:calc(100% - 80px);}
+  .map-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-faint);font-family:var(--font-mono);font-size:0.8rem;text-align:center;padding:30px;z-index:800;background:#0a0f0c;}
 </style>
 </head>
 <body>
@@ -47,118 +51,218 @@
   <header class="topbar">
     <div class="brand">
       <div class="wordmark">CADASTRA<span>AI</span></div>
-      <div class="subtitle">Upload Your Own Area · Team ELAVI</div>
+      <div class="subtitle">New Survey · Team ELAVI</div>
     </div>
     <nav class="segmented">
-      <a href="index.html">CADASTRAL MAP</a>
-      <a href="detection.html">COMPLIANCE &amp; DETECTION</a>
-      <a href="model.html">MODEL OUTPUT</a>
-      <a href="upload.html" class="active">UPLOAD YOUR OWN</a>
+      <a href="workbench.html">WORKBENCH</a>
+      <a href="upload.html" class="active">NEW SURVEY</a>
+      <a href="field.html">FIELD</a>
     </nav>
   </header>
 
-  <main style="overflow-y:auto;">
-    <div class="upload-wrap">
-
-      <div class="warn-banner">
-        <b>Needs the local backend.</b> This runs real image processing and live OpenStreetMap
-        lookups on your machine — it only works when you're running <code>python backend/app.py</code>
-        locally. It will not work on the public static demo (there's no server behind that one).
-      </div>
-
-      <div class="card">
-        <h2>Process a drone image or video</h2>
-        <p class="sub">Upload a drone photo, satellite orthoimage, or a short video (its middle frame is used — this is not multi-frame stitching). Tell us roughly where it was taken and how wide an area it covers, and the same detection + parcel + rule-engine pipeline used for the Igatpuri demo runs on it.</p>
-
+  <main class="ns">
+    <aside class="ns-side">
+      <section class="step" id="step1">
+        <h2><span class="n">1</span>Survey data</h2>
+        <div class="note">Drone orthoimage (ORI) as a GeoTIFF, with an optional DSM and DTM. If only a DSM is given, the terrain model is derived automatically.</div>
         <form id="uploadForm">
-          <label class="field">
-            <span>Image or video file</span>
-            <input type="file" id="fileInput" accept="image/*,video/mp4,video/quicktime,video/x-msvideo,video/webm" required>
-          </label>
-
-          <div class="row2">
-            <label class="field">
-              <span>Centre latitude</span>
-              <input type="text" id="latInput" placeholder="e.g. 19.6975" required>
-            </label>
-            <label class="field">
-              <span>Centre longitude</span>
-              <input type="text" id="lonInput" placeholder="e.g. 73.5600" required>
-            </label>
+          <label class="field"><span>Survey name</span><input type="text" name="name" id="surveyName" maxlength="120" placeholder="e.g. Ward 14, Singh Nagar" required></label>
+          <label class="field"><span>Orthoimage (ORI) — required</span><input type="file" name="ori" id="oriFile" accept=".tif,.tiff,.jpg,.jpeg,.png,.webp,.mp4,.mov,.avi,.mkv,.webm" required>
+            <small>GeoTIFF preferred. A plain photo or short video also works if you georeference it below.</small></label>
+          <div id="georefBox" class="hidden">
+            <div class="msg info">This file has no coordinates. Give its centre point and how wide the ground area is; the result is approximate.</div>
+            <div class="row3">
+              <label class="field"><span>Centre lat</span><input type="number" step="any" name="center_lat" placeholder="16.5256"></label>
+              <label class="field"><span>Centre lon</span><input type="number" step="any" name="center_lon" placeholder="80.6377"></label>
+              <label class="field"><span>Width (m)</span><input type="number" step="any" min="1" name="width_m" placeholder="250"></label>
+            </div>
           </div>
-
-          <label class="field">
-            <span>Approximate ground width (metres)</span>
-            <input type="number" id="widthInput" placeholder="e.g. 300" min="10" required>
-            <small>Roughly how wide a real-world strip the image covers, left edge to right edge. Not sure? A typical single-house drone photo from ~50m altitude covers roughly 60–120m; a wider survey pass covers several hundred metres.</small>
-          </label>
-
-          <button type="submit" class="submit-btn" id="submitBtn">Process Upload</button>
+          <div class="row2">
+            <label class="field"><span>DSM (optional)</span><input type="file" name="dsm" accept=".tif,.tiff"></label>
+            <label class="field"><span>DTM (optional)</span><input type="file" name="dtm" accept=".tif,.tiff"></label>
+          </div>
+          <div class="btn-row" style="margin-top:14px"><button class="btn primary" type="submit" id="uploadBtn">Upload &amp; preview</button></div>
+          <div class="uploadbar hidden" id="uploadBar"><span></span></div>
+          <div id="uploadMsg"></div>
         </form>
+      </section>
 
-        <div class="status-box" id="statusBox"></div>
-      </div>
+      <section class="step off" id="step2">
+        <h2><span class="n">2</span>Area to map</h2>
+        <div class="note" id="rasterInfo"></div>
+        <div class="stat-grid" style="margin-top:12px">
+          <div class="stat-tile"><div class="num" id="aoiArea">—</div><div class="lbl">Selected area</div></div>
+          <div class="stat-tile"><div class="num" id="aoiLimit">—</div><div class="lbl">Max per run</div></div>
+        </div>
+        <div class="btn-row" style="margin-top:12px">
+          <button class="btn" id="drawAoiBtn" type="button">Draw area on map</button>
+          <button class="btn" id="wholeBtn" type="button">Use whole image</button>
+        </div>
+        <div id="aoiMsg"></div>
+      </section>
 
-      <div class="card">
-        <h2>What's different from the demo</h2>
-        <p class="sub" style="margin-bottom:0;">
-          The Igatpuri demo trains a RandomForest on real, verified OSM building labels for that
-          specific colony. An arbitrary new upload has no labelled ground truth to train on, so
-          building detection here falls back to an unsupervised brightness/texture threshold —
-          it will find obvious rooftops but is less reliable than the trained demo model. Road,
-          rail, water and government-land layers ARE still real: they're fetched live from
-          OpenStreetMap for whatever location you give it.
-        </p>
-      </div>
+      <section class="step off" id="step3">
+        <h2><span class="n">3</span>Run AI pipeline</h2>
+        <div class="note">AI land cover (buildings, roads, trees, grass, bare land, water) → building footprints, roads &amp; lanes and parcels → topology validation.</div>
+        <label class="field"><span>AI model</span>
+          <select id="modelSelect" style="width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;color:var(--text);font-size:0.82rem">
+            <option value="auto">Automatic: the approved models on Kaggle GPU (land cover v2 on this laptop if Kaggle is unreachable)</option>
+          </select>
+          <small id="modelNote"></small></label>
+        <div class="btn-row" style="margin-top:12px"><button class="btn primary" id="runBtn" type="button">Process survey</button></div>
+        <ul class="stages" id="stages"></ul>
+        <div id="runMsg"></div>
+      </section>
+    </aside>
 
+    <div class="map-panel">
+      <div id="map"></div>
+      <div class="map-hint hidden" id="mapHint">Drag a rectangle over the area to map.</div>
+      <div class="map-empty" id="mapEmpty">Upload an orthoimage to preview it here.</div>
     </div>
   </main>
 </div>
 
+<script src="/vendor/leaflet.js"></script>
+<script src="/vendor/leaflet-geoman.js"></script>
 <script>
-(function(){
+(function () {
 "use strict";
-var form = document.getElementById('uploadForm');
-var statusBox = document.getElementById('statusBox');
-var submitBtn = document.getElementById('submitBtn');
+var $ = function (id) { return document.getElementById(id); };
+var upload = null, aoi = null, aoiLayer = null;
 
-function setStatus(kind, html){
-  statusBox.className = 'status-box show ' + kind;
-  statusBox.innerHTML = html;
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+  });
+}
+function msg(el, kind, text) { $(el).innerHTML = text ? '<div class="msg ' + kind + '">' + esc(text) + '</div>' : ''; }
+
+var map = L.map('map', {zoomSnap: 0, zoomDelta: 0.5, maxZoom: 22}).setView([20.6, 78.9], 5);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'}).addTo(map);
+
+var PLAIN = /\.(jpe?g|png|webp|mp4|mov|avi|mkv|webm)$/i;
+$('oriFile').addEventListener('change', function (e) {
+  var f = e.target.files[0];
+  var plain = !!(f && PLAIN.test(f.name));
+  $('georefBox').classList.toggle('hidden', !plain);
+  $('georefBox').querySelectorAll('input').forEach(function (i) { i.required = plain; });
+  if (f && !$('surveyName').value) $('surveyName').value = f.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+});
+
+$('uploadForm').addEventListener('submit', function (e) {
+  e.preventDefault();
+  var fd = new FormData(e.target);
+  ['dsm', 'dtm'].forEach(function (k) { var v = fd.get(k); if (v && !v.name) fd.delete(k); });
+  var xhr = new XMLHttpRequest();
+  $('uploadBtn').disabled = true;
+  $('uploadBar').classList.remove('hidden');
+  msg('uploadMsg', 'info', 'Uploading…');
+  xhr.upload.onprogress = function (ev) {
+    if (ev.lengthComputable) {
+      $('uploadBar').firstElementChild.style.width = (100 * ev.loaded / ev.total) + '%';
+      if (ev.loaded === ev.total) msg('uploadMsg', 'info', 'Reading raster and building preview…');
+    }
+  };
+  xhr.onload = function () {
+    $('uploadBtn').disabled = false;
+    var res;
+    try { res = JSON.parse(xhr.responseText); } catch (err) { res = {error: 'Unexpected server response (' + xhr.status + ').'}; }
+    if (xhr.status !== 200) { msg('uploadMsg', 'err', res.error || 'Upload failed.'); return; }
+    onUploaded(res);
+  };
+  xhr.onerror = function () { $('uploadBtn').disabled = false; msg('uploadMsg', 'err', 'Upload failed — is the local server running?'); };
+  xhr.open('POST', '/api/intake');
+  xhr.send(fd);
+});
+
+function onUploaded(info) {
+  upload = info;
+  msg('uploadMsg', 'ok', 'Uploaded.' + (info.notes && info.notes.length ? ' ' + info.notes.join('; ') : ''));
+  $('step1').classList.add('done');
+  showModelNote();
+  $('step2').classList.remove('off');
+  $('mapEmpty').classList.add('hidden');
+  var o = info.ori;
+  $('rasterInfo').innerHTML = esc(o.width_px.toLocaleString() + ' × ' + o.height_px.toLocaleString() + ' px · ' + o.gsd_cm + ' cm/px · ' + o.area_km2 + ' km² · ' + o.crs) +
+    '<br>' + (info.files.dsm ? (info.files.dtm ? 'DSM + DTM provided' : 'DSM provided — DTM will be derived') : 'No DSM — colour-only segmentation');
+  $('aoiLimit').textContent = info.max_aoi_km2 + ' km²';
+  L.imageOverlay('/intake/' + encodeURIComponent(info.id) + '/preview.png', info.preview_bounds).addTo(map);
+  map.fitBounds(info.preview_bounds);
+  if (o.area_km2 <= info.max_aoi_km2) setAoi(o.bounds);
+  else startDraw();
 }
 
-form.addEventListener('submit', function(e){
-  e.preventDefault();
-  var file = document.getElementById('fileInput').files[0];
-  if(!file){ setStatus('error', 'Choose a file first.'); return; }
+function areaKm2(b) {
+  return (b[2] - b[0]) * 111.32 * Math.cos((b[1] + b[3]) / 2 * Math.PI / 180) * (b[3] - b[1]) * 111.32;
+}
 
-  var fd = new FormData();
-  fd.append('file', file);
-  fd.append('center_lat', document.getElementById('latInput').value);
-  fd.append('center_lon', document.getElementById('lonInput').value);
-  fd.append('width_m', document.getElementById('widthInput').value);
+function setAoi(b) {
+  if (aoiLayer) map.removeLayer(aoiLayer);
+  aoi = b;
+  aoiLayer = L.rectangle([[b[1], b[0]], [b[3], b[2]]], {color: '#45C7B8', weight: 2, fillOpacity: 0.08, pmIgnore: true, interactive: false}).addTo(map);
+  var a = areaKm2(b), ok = a <= upload.max_aoi_km2;
+  $('aoiArea').textContent = a.toFixed(3) + ' km²';
+  $('aoiArea').style.color = ok ? 'var(--ok)' : 'var(--critical)';
+  msg('aoiMsg', ok ? 'ok' : 'err', ok ? 'Area set (~' + Math.round(a * 1e6).toLocaleString() + ' m², about ' + (Math.round(a / 0.09 * 10) / 10) + ' M pixels at 30 cm, the models\' scale).' : 'Too large for one run — draw a smaller area.');
+  $('step2').classList.toggle('done', ok);
+  $('step3').classList.toggle('off', !ok);
+  $('mapHint').classList.add('hidden');
+}
 
-  submitBtn.disabled = true;
-  setStatus('working', 'Processing — detecting structures and fetching real map data for this location. This can take 10–30 seconds…');
-
-  fetch('/api/process', {method:'POST', body:fd})
-    .then(function(r){
-      if(!r.ok){
-        return r.json().then(function(d){ throw new Error(d.error || ('HTTP ' + r.status)); })
-          .catch(function(){ throw new Error('The backend isn\'t reachable — this feature needs `python backend/app.py` running locally, and won\'t work on the public static demo.'); });
-      }
-      return r.json();
-    })
-    .then(function(d){
-      setStatus('done', 'Done — detected ' + d.buildings_detected + ' structures and ' + d.parcels + ' parcels. '+
-        '<a href="index.html?session='+d.session_id+'">View Cadastral Map</a> · '+
-        '<a href="detection.html?session='+d.session_id+'">View Compliance &amp; Detection</a>');
-    })
-    .catch(function(err){
-      setStatus('error', String(err.message || err));
-    })
-    .finally(function(){ submitBtn.disabled = false; });
+function startDraw() {
+  $('mapHint').classList.remove('hidden');
+  map.pm.enableDraw('Rectangle', {pathOptions: {color: '#45C7B8'}});
+}
+map.on('pm:create', function (e) {
+  var bb = e.layer.getBounds();
+  map.removeLayer(e.layer);
+  var o = upload.ori.bounds;
+  setAoi([Math.max(bb.getWest(), o[0]), Math.max(bb.getSouth(), o[1]), Math.min(bb.getEast(), o[2]), Math.min(bb.getNorth(), o[3])]);
 });
+var MODELS = {};
+fetch('/api/models').then(function (r) { return r.json(); }).then(function (m) {
+  MODELS = m;
+  Object.keys(m).forEach(function (k) {
+    var o = document.createElement('option'); o.value = k; o.textContent = m[k].label; $('modelSelect').appendChild(o);
+  });
+  showModelNote();
+}).catch(function () {});
+function showModelNote() {
+  var k = $('modelSelect').value;
+  if (k === 'auto') k = 'stack_dplus';
+  var m = MODELS[k];
+  $('modelNote').textContent = m ? m.summary + ' Known limits: ' + m.limits : '';
+}
+$('modelSelect').addEventListener('change', showModelNote);
+$('drawAoiBtn').addEventListener('click', startDraw);
+$('wholeBtn').addEventListener('click', function () { setAoi(upload.ori.bounds); });
+
+$('runBtn').addEventListener('click', function () {
+  $('runBtn').disabled = true;
+  msg('runMsg', '', '');
+  fetch('/api/intake/' + encodeURIComponent(upload.id) + '/process', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: $('surveyName').value, aoi: aoi, model: $('modelSelect').value})
+  }).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error); return j; }); })
+    .then(function (j) { poll(j.job_id); })
+    .catch(function (err) { $('runBtn').disabled = false; msg('runMsg', 'err', err.message); });
+});
+
+function poll(jobId) {
+  fetch('/api/jobs/' + encodeURIComponent(jobId)).then(function (r) { return r.json(); }).then(function (job) {
+    $('stages').innerHTML = job.stages.map(function (s, i) {
+      var cls = job.state === 'done' || i < job.stage ? 'ok' : (i === job.stage && job.state === 'running' ? 'now' : '');
+      return '<li class="' + cls + '"><span class="ic"></span>' + esc(s) + '</li>';
+    }).join('');
+    if (job.state === 'running') { setTimeout(function () { poll(jobId); }, 1000); return; }
+    $('runBtn').disabled = false;
+    if (job.state === 'error') { msg('runMsg', 'err', 'Processing failed: ' + job.error); return; }
+    $('step3').classList.add('done');
+    $('runMsg').innerHTML = '<div class="msg ok">Done in ' + job.seconds + ' s. <a href="workbench.html?survey=' + encodeURIComponent(job.survey_id) + '" style="color:inherit;font-weight:600">Open in workbench →</a></div>';
+    setTimeout(function () { location.href = 'workbench.html?survey=' + encodeURIComponent(job.survey_id); }, 1500);
+  }).catch(function () { setTimeout(function () { poll(jobId); }, 2000); });
+}
 })();
 </script>
 </body>
