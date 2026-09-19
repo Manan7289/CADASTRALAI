@@ -38,32 +38,37 @@
     <div class="map-panel">
       <div id="map"></div>
 
-      <div class="map-toolbar" role="toolbar" aria-label="Editing tools">
+      <div class="map-top">
+        <nav class="view-bar" id="viewBar" aria-label="Pipeline steps">
+          <button data-view="image"><i>1</i>Image</button>
+          <button data-view="buildings"><i>2</i>Buildings</button>
+          <button data-view="landcover"><i>3</i>Land cover</button>
+          <button data-view="parcels"><i>4</i>Parcels</button>
+          <button data-view="review"><i>5</i>Review</button>
+        </nav>
+        <div class="view-caption" id="viewCaption"></div>
+      </div>
+
+      <div class="map-toolbar" role="toolbar" aria-label="Parcel editing tools">
+        <span class="tb-label">Edit parcels</span>
         <button data-tool="select" class="active" title="Select (shift-click to add to selection)">Select</button>
         <button data-tool="edit" title="Edit the selected parcel's boundary">Edit boundary</button>
-        <button data-tool="draw" title="Draw a new parcel">Draw parcel</button>
+        <button data-tool="draw" title="Draw a new parcel">Draw</button>
         <button data-tool="merge" title="Merge the selected parcels">Merge</button>
         <button data-tool="delete" title="Delete the selected parcels">Delete</button>
         <button id="undoBtn" title="Undo last change (Ctrl/Cmd+Z)">Undo</button>
       </div>
 
-      <div class="colour-mode">
-        <span>Colour parcels by</span>
-        <div class="segmented small" id="colourMode">
-          <button data-mode="status" class="active">Review</button>
-          <button data-mode="confidence">Confidence</button>
-          <button data-mode="landcover">Land cover</button>
-          <button data-mode="record">Record</button>
-        </div>
+      <div class="layer-panel" id="layerPanel">
+        <button class="lp-head" type="button">Layers <span>▾</span></button>
+        <div class="lp-body"></div>
       </div>
-
-      <div class="map-legend" id="mapLegend"></div>
       <div class="loading" id="loadingScreen">Loading surveys…</div>
     </div>
 
     <aside class="inspector wb-side">
       <div class="tabs" role="tablist">
-        <button role="tab" data-tab="overview" class="active">Overview</button>
+        <button role="tab" data-tab="overview" class="active">Summary</button>
         <button role="tab" data-tab="review">Review <span class="count" id="reviewCount"></span></button>
         <button role="tab" data-tab="issues">Topology <span class="count" id="issueCount"></span></button>
         <button role="tab" data-tab="records">Records</button>
