@@ -107,6 +107,15 @@ def api_split(sid):
     return jsonify({"parcels": parcels_fc, "issues": issues_fc, "ids": ids})
 
 
+@app.route("/api/surveys/<sid>/report")
+def api_report(sid):
+    import report
+    try:
+        return Response(report.build(sid), mimetype="text/html")
+    except FileNotFoundError:
+        return jsonify({"error": "Unknown survey."}), 404
+
+
 @app.route("/api/surveys/<sid>/export")
 def api_export(sid):
     fmt = request.args.get("fmt", "gpkg")

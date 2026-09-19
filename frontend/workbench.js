@@ -884,7 +884,9 @@ function exportHtml() {
     '<div class="note">' + approved + ' of ' + feats.length + ' parcels approved.</div>' +
     exportCard('GeoPackage (.gpkg)', 'Parcels + buildings + roads · ' + esc(state.meta.crs) + ' · QGIS / ArcGIS / PostGIS', base + 'gpkg') +
     exportCard('Shapefile (.zip)', 'Parcels + buildings + roads · ' + esc(state.meta.crs) + ' · legacy land-record systems', base + 'shp') +
-    exportCard('GeoJSON', 'EPSG:4326 · web maps & APIs', base + 'geojson');
+    exportCard('GeoJSON', 'EPSG:4326 · web maps & APIs', base + 'geojson') +
+    '<div class="export-card"><b>Survey report</b><small>One printable page: parcel map, land use, roads, encroachments, topology, review, records, models and accuracy</small>' +
+    '<a class="btn primary" target="_blank" href="/api/surveys/' + encodeURIComponent(state.sid) + '/report">Open</a></div>';
 }
 
 function exportCard(title, sub, href) {
