@@ -25,6 +25,7 @@ var CLASS_META = [
   ['building', 'Building', PALETTE.building], ['road', 'Road / paved', PALETTE.road],
   ['low_veg', 'Low vegetation', PALETTE.grass], ['tree', 'Tree', PALETTE.tree], ['clutter', 'Other', PALETTE.paved]
 ];
+var ROAD_CLASS = {'lane': ['#FFB020', 'Lane (under 3 m)'], 'street': ['#8FE0FF', 'Street (3–8 m)'], 'main road': ['#FF5FD2', 'Main road (over 8 m)']};
 var FILL_SOURCE = 'fill';  // building footprints filled in from the land-cover model carry this in `source`
 var ISSUE_LABEL = {
   INVALID: 'Invalid geometry', MULTIPART: 'Multipart parcel', OVERLAP: 'Overlap', DUPLICATE: 'Duplicate',
@@ -306,8 +307,12 @@ function layerDefs() {
   ];
   if (overlays.landcover) defs.push({key: 'landcover', name: 'Land cover', info: '8 classes',
     legend: '<div class="lp-grid">' + LC8.map(function (c) { return '<div>' + sw('background:' + c[2]) + esc(c[1]) + '</div>'; }).join('') + '</div>'});
+  var byCls = s.road_length_by_class_m || {};
   defs.push({key: 'corridors', name: 'Roads & lanes', info: fmt(s.corridor_length_m, 0) + ' m',
-    legend: keyRows([['Access corridor', 'background:rgba(232,232,232,0.3);border:1px dashed ' + PALETTE.road]])});
+    legend: keyRows([['Paved road area', 'background:rgba(232,232,232,0.3);border:1px dashed ' + PALETTE.road]].concat(
+      state.roads && state.roads.features.length ? Object.keys(ROAD_CLASS).map(function (k) {
+        return [ROAD_CLASS[k][1], 'height:4px;border-radius:2px;background:' + ROAD_CLASS[k][0], byCls[k] != null ? fmt(byCls[k], 0) + ' m' : null];
+      }) : []))});
   defs.push({key: 'parcels', name: 'Parcels', info: state.parcels.features.length, legend: parcelKey()});
   defs.push({key: 'issues', name: 'Topology problems', info: state.issues.features.length,
     legend: keyRows([['Overlap, gap, sliver…', 'background:rgba(226,104,95,0.45);border:1px dashed #E2685F']])});
@@ -381,11 +386,12 @@ function openSurvey(sid) {
     fetch(base + 'parcels.geojson').then(function (r) { return r.json(); }),
     fetch(base + 'issues.geojson').then(function (r) { return r.json(); }),
     fetch(base + 'buildings.geojson').then(function (r) { return r.json(); }),
-    fetch(base + 'corridors.geojson').then(function (r) { return r.json(); })
+    fetch(base + 'corridors.geojson').then(function (r) { return r.json(); }),
+    fetch(base + 'roads.geojson').then(function (r) { return r.ok ? r.json() : {type: 'FeatureCollection', features: []}; })
   ]).then(function (res) {
     clearMap();
     state.sid = sid;
-    state.meta = res[0]; state.parcels = res[1]; state.issues = res[2]; state.buildings = res[3]; state.corridors = res[4];
+    state.meta = res[0]; state.parcels = res[1]; state.issues = res[2]; state.buildings = res[3]; state.corridors = res[4]; state.roads = res[5];
     state.selected = [];
     $('surveySubtitle').textContent = 'Survey Workbench · ' + state.meta.name;
 
@@ -404,8 +410,16 @@ function openSurvey(sid) {
       return {color: PALETTE.building, weight: filled ? 1.6 : 1.8, dashArray: filled ? '5 4' : null,
               fillColor: PALETTE.building, fillOpacity: 0.1};
     }});
-    corridorLayer = L.geoJSON(state.corridors, {interactive: false, pmIgnore: true,
-      style: {color: PALETTE.road, weight: 1, dashArray: '3 3', fillColor: PALETTE.road, fillOpacity: 0.25}});
+    // roads & lanes: the paved area, plus the centreline network coloured by width class
+    corridorLayer = L.featureGroup([
+      L.geoJSON(state.corridors, {interactive: false, pmIgnore: true,
+        style: {color: PALETTE.road, weight: 1, dashArray: '3 3', fillColor: PALETTE.road, fillOpacity: 0.2}}),
+      L.geoJSON(state.roads, {pmIgnore: true, style: function (f) {
+        return {color: (ROAD_CLASS[f.properties.class] || ROAD_CLASS.street)[0], weight: 3, opacity: 0.95};
+      }, onEachFeature: function (f, l) {
+        l.bindTooltip((ROAD_CLASS[f.properties.class] || ROAD_CLASS.street)[1].split(' (')[0] + ' · ' + f.properties.width_m + ' m wide · ' + f.properties.length_m + ' m long', {sticky: true});
+      }})
+    ]);
     overlays.buildings = buildingLayer;
     overlays.corridors = corridorLayer;
     var wantView = new URLSearchParams(location.search).get('view');
@@ -647,7 +661,7 @@ function overviewHtml() {
 
   html += '<div><h3 class="panel-title">What the AI found</h3><div class="found">' +
     foundCard('buildings', 'border:2px solid ' + PALETTE.building, nB, 'buildings',
-      nF ? (nB - nF) + ' from the roof model · ' + nF + ' filled in from land cover (check)' : 'outlined by the roof model') +
+      nF ? (nB - nF) + ' from the roof model · ' + nF + ' filled in from land cover (check)' : 'outlined by the AI, one per house') +
     (lcf ? foundCard('landcover', 'background:conic-gradient(' + PALETTE.building + ' 0 33%,' + PALETTE.tree + ' 0 66%,' + PALETTE.road + ' 0)', '8', 'land cover classes',
       'mostly ' + topLandCover(3)) : '') +
     foundCard('parcels', 'background:' + PALETTE.open + ';border:1px solid #F2E9DC', feats.length, 'parcels',
@@ -805,11 +819,11 @@ function exportHtml() {
   var approved = feats.filter(function (f) { return f.properties.status === 'approved'; }).length;
   var nIssues = state.issues.features.length;
   return '<div><h3 class="panel-title">GIS-ready export</h3>' +
-    '<div class="note">Exports the current parcel layer with attributes: provisional PIN, area, perimeter, land cover, built-up %, road frontage, AI confidence, review status, edit source and open topology issues.</div></div>' +
+    '<div class="note">GeoPackage and Shapefile contain three layers: <b>parcels</b> (provisional PIN, area, perimeter, land use, share of each land-cover class, built-up %, road frontage, AI confidence, review status, edit source, open topology issues), <b>buildings</b> (footprint, area, which model found it) and <b>roads</b> (roads &amp; lanes with median width and length). GeoJSON is parcels only.</div></div>' +
     (nIssues ? '<div class="finding sev-warning"><div><b>' + nIssues + ' topology issue(s) still open</b><p>Export is allowed, but fix or review them first for a clean cadastral layer.</p></div></div>' : '<div class="clean-msg">Topology clean.</div>') +
     '<div class="note">' + approved + ' of ' + feats.length + ' parcels approved.</div>' +
-    exportCard('GeoPackage (.gpkg)', 'Projected ' + esc(state.meta.crs) + ' · QGIS / ArcGIS / PostGIS', base + 'gpkg') +
-    exportCard('Shapefile (.zip)', 'Projected ' + esc(state.meta.crs) + ' · legacy land-record systems', base + 'shp') +
+    exportCard('GeoPackage (.gpkg)', 'Parcels + buildings + roads · ' + esc(state.meta.crs) + ' · QGIS / ArcGIS / PostGIS', base + 'gpkg') +
+    exportCard('Shapefile (.zip)', 'Parcels + buildings + roads · ' + esc(state.meta.crs) + ' · legacy land-record systems', base + 'shp') +
     exportCard('GeoJSON', 'EPSG:4326 · web maps & APIs', base + 'geojson');
 }
 

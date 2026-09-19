@@ -103,10 +103,10 @@
 
       <section class="step off" id="step3">
         <h2><span class="n">3</span>Run AI pipeline</h2>
-        <div class="note">Segmentation (U-Net, colour + height when available) → building footprints, access corridors and parcels → topology validation.</div>
+        <div class="note">AI land cover (buildings, roads, trees, grass, bare land, water) → building footprints, roads &amp; lanes and parcels → topology validation.</div>
         <label class="field"><span>AI model</span>
           <select id="modelSelect" style="width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;color:var(--text);font-size:0.82rem">
-            <option value="auto">Automatic (DSM present → aerial + height model; otherwise Indian drone model)</option>
+            <option value="auto">Automatic (DSM present → aerial + height model; otherwise land cover v2)</option>
           </select>
           <small id="modelNote"></small></label>
         <div class="btn-row" style="margin-top:12px"><button class="btn primary" id="runBtn" type="button">Process survey</button></div>
@@ -204,7 +204,7 @@ function setAoi(b) {
   var a = areaKm2(b), ok = a <= upload.max_aoi_km2;
   $('aoiArea').textContent = a.toFixed(3) + ' km²';
   $('aoiArea').style.color = ok ? 'var(--ok)' : 'var(--critical)';
-  msg('aoiMsg', ok ? 'ok' : 'err', ok ? 'Area set (~' + Math.round(a * 1e6).toLocaleString() + ' m², about ' + Math.round(a * 1e8 / 1e6) + ' M pixels at 10 cm).' : 'Too large for one run — draw a smaller area.');
+  msg('aoiMsg', ok ? 'ok' : 'err', ok ? 'Area set (~' + Math.round(a * 1e6).toLocaleString() + ' m², about ' + Math.round(a * 1e8 / 1e6) + ' M pixels at 10 cm; land cover v2 runs at 30 cm).' : 'Too large for one run — draw a smaller area.');
   $('step2').classList.toggle('done', ok);
   $('step3').classList.toggle('off', !ok);
   $('mapHint').classList.add('hidden');
@@ -230,7 +230,7 @@ fetch('/api/models').then(function (r) { return r.json(); }).then(function (m) {
 }).catch(function () {});
 function showModelNote() {
   var k = $('modelSelect').value;
-  if (k === 'auto') k = upload && upload.files && upload.files.dsm ? 'aerial_dsm' : 'indian_drone';
+  if (k === 'auto') k = upload && upload.files && upload.files.dsm ? 'aerial_dsm' : 'landcover_v2';
   var m = MODELS[k];
   $('modelNote').textContent = m ? m.summary + ' Known limits: ' + m.limits : '';
 }

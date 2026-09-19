@@ -194,6 +194,9 @@ def create(name, source, loaded, probs, extracted, model_info, landcover=None):
                   "geometry": mapping(_geom_to_ll(c["geometry"], to_ll))} for c in extracted["corridors"]]
     _write_json(d / "buildings.geojson", fc(buildings))
     _write_json(d / "corridors.geojson", fc(corridors))
+    roads = [{"type": "Feature", "properties": {k: v for k, v in r.items() if k != "geometry"},
+              "geometry": mapping(_geom_to_ll(r["geometry"], to_ll))} for r in extracted.get("roads", [])]
+    _write_json(d / "roads.geojson", fc(roads))
 
     meta = {
         "id": sid, "name": name, "source": source, "created": time.strftime("%Y-%m-%d %H:%M"),

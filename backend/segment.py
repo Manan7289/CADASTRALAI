@@ -31,13 +31,18 @@ MODELS = {
         "summary": "U-Net ResNet34, RGB + height. Potsdam test tiles: mIoU 0.723, building IoU 0.913.",
         "limits": "Misses many plain grey concrete roofs in Indian settlements when used without a DSM.",
     },
-    "indian_drone": {
-        "file": "unet_vijayawada_ft_v2.pt",
-        "label": "Indian drone imagery, colour only (Potsdam model fine-tuned on Vijayawada)",
-        "summary": "Held-out Singh Nagar block vs open footprints: building IoU 0.34 -> 0.77, footprints found 13 -> 36 of 49; OSM road pixels called building 6.6%.",
-        "limits": "Adjacent houses are often merged into one footprint; trees and low vegetation are under-detected.",
+    "landcover_v2": {
+        "file": "landcover_v2_segformer/landcover_v2_segformer_b2.pt",
+        "kind": "landcover", "gsd_m": 0.3,
+        "label": "Colour imagery: land cover v2 (SegFormer-B2, OpenEarthMap) + houses split from its building map",
+        "summary": "8 classes, 44 countries. OpenEarthMap validation mIoU 0.67 (road 0.65, tree 0.71, grass 0.58, bare land 0.44). "
+                   "Runs on a laptop CPU at 0.3 m.",
+        "limits": "Houses are split from the building map, so touching houses can merge or split wrongly (check them); "
+                  "processed at 0.3 m. The stacked roof model gives cleaner per-house outlines but needs a GPU (Kaggle).",
     },
 }
+# the Vijayawada fine-tune (unet_vijayawada_ft_v2.pt) was retired on 2026-09-19: it called most of a leafy
+# Bengaluru street "building" and no tree at all
 # CADASTRAAI_MODEL lets a dev run point every survey at another checkpoint (e.g. the smoke-test weights)
 _OVERRIDE = os.environ.get("CADASTRAAI_MODEL")
 MODEL_PATH = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS["aerial_dsm"]["file"]
@@ -45,9 +50,9 @@ MODEL_PATH = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS["aerial_dsm"]
 
 def choose_model(key, has_height):
     """'auto' picks the height-trained model when the survey has a DSM, the
-    Indian fine-tune otherwise. Returns (key, path, info)."""
+    land-cover model otherwise. Returns (key, path, info)."""
     if key in (None, "", "auto"):
-        key = "aerial_dsm" if has_height else "indian_drone"
+        key = "aerial_dsm" if has_height else "landcover_v2"
     if key not in MODELS:
         raise ValueError(f"Unknown model '{key}'.")
     path = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS[key]["file"]
@@ -166,3 +171,52 @@ def predict(rgb, ndsm=None, crop=512, overlap=128, model_path=MODEL_PATH):
             weight[i:i + crop, j:j + crop] += win
     probs /= np.maximum(weight, 1e-6)
     return probs[:, :H, :W], ckpt["classes"]
+
+
+# ---------------------------------------------------------------- land cover v2 (8 classes)
+IMNET_MEAN = np.array([0.485, 0.456, 0.406], np.float32)
+IMNET_STD = np.array([0.229, 0.224, 0.225], np.float32)
+
+
+class _FullRes(torch.nn.Module):
+    """SegFormer predicts at 1/4 resolution; upsample to the input size (as in training)."""
+    def __init__(self, m):
+        super().__init__()
+        self.m = m
+
+    def forward(self, x):
+        o = self.m(x)
+        return o if o.shape[-2:] == x.shape[-2:] else torch.nn.functional.interpolate(
+            o, size=x.shape[-2:], mode="bilinear", align_corners=False)
+
+
+def load_landcover(path):
+    key = str(path)
+    if key not in _model_cache:
+        import segmentation_models_pytorch as smp
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        net = _FullRes(smp.Segformer("mit_b2", encoder_weights=None, in_channels=3, classes=9))
+        net.load_state_dict(ck["state_dict"])
+        _model_cache[key] = (net.eval(), ck)
+    return _model_cache[key][0]
+
+
+def predict_landcover(rgb, model_path, tile=512, stride=384):
+    """(9,H,W) class probabilities (index 0 = unlabelled, never predicted). CPU, about 15 s and
+    under 1 GB for a 0.17 km2 area at 0.3 m."""
+    net = load_landcover(model_path)
+    h, w = rgb.shape[:2]
+    im = np.pad(rgb, ((0, max(0, tile - h)), (0, max(0, tile - w)), (0, 0)), mode="reflect")
+    H, W = im.shape[:2]
+    x = torch.from_numpy(((im.astype(np.float32) / 255 - IMNET_MEAN) / IMNET_STD).transpose(2, 0, 1)[None])
+    acc = np.zeros((9, H, W), np.float32)
+    cnt = np.zeros((H, W), np.float32)
+    starts = lambda n: sorted(set(list(range(0, n - tile + 1, stride)) + [n - tile]))
+    with torch.inference_mode():
+        for y in starts(H):
+            for xx in starts(W):
+                o = net(x[:, :, y:y + tile, xx:xx + tile])
+                o[:, 0] = -1e4
+                acc[:, y:y + tile, xx:xx + tile] += o.softmax(1)[0].numpy()
+                cnt[y:y + tile, xx:xx + tile] += 1
+    return (acc / cnt)[:, :h, :w]

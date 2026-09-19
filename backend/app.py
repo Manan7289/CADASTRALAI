@@ -99,8 +99,10 @@ def api_merge(sid):
 def api_export(sid):
     fmt = request.args.get("fmt", "gpkg")
     try:
-        fc = json.loads((survey.survey_dir(sid) / "parcels.geojson").read_text(encoding="utf-8"))
-        data, name, mime = export_parcels(fc, fmt)
+        d = survey.survey_dir(sid)
+        read = lambda f: json.loads((d / f).read_text(encoding="utf-8")) if (d / f).exists() else None
+        data, name, mime = export_parcels(read("parcels.geojson"), fmt, read("buildings.geojson"), read("corridors.geojson"),
+                                           read("roads.geojson"))
     except FileNotFoundError:
         return jsonify({"error": "Unknown survey."}), 404
     except ValueError as e:
