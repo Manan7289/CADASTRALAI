@@ -38,6 +38,7 @@ For the field page on a phone (browsers only give GPS to HTTPS pages):
 | Roof fill-in | `backend/roof_fill.py` | Buildings the roof model misses but land cover marks as building are split into houses (watershed, shape and width checks) and tagged for review |
 | Corridors & roads | `backend/parcel_extract.py`, `backend/road_network.py` | Access corridors from land cover incl. paved lanes, gaps under trees bridged, centrelines classified as lane / street / main road with lengths |
 | Parcels | `backend/plot_layout.py` | Each block is rotated to its grid; plots grow from the houses and stop at the parcel-boundary model's lines; land beyond reach becomes open land |
+| Plot lines | `backend/regularise.py` | The shared boundary network is split into arcs and each is straightened once, so neighbours keep one straight line between them; a line that would cut a house, or that the topology checks dislike, is reverted |
 | Land use | `backend/land_use.py` | Per parcel: residential, apartments, commercial, institutional, open space, vacant, water — each with the reason it was chosen |
 | Checks | `backend/parcel_extract.py`, `backend/compare.py` | Building heights and storeys from the nDSM; encroachment on a road, or across a recorded boundary |
 | Topology | `backend/topology.py` | Invalid, multipart, hole, overlap, duplicate, gap, sliver, too-small checks; auto-fix that gives surveyor edits priority |
@@ -75,9 +76,10 @@ For the field page on a phone (browsers only give GPS to HTTPS pages):
 
 - **Parcel boundaries** — U-Net (ResNet34) trained on Dutch cadastral parcels
   (PDOK imagery + Kadaster BRK), then fine-tuned on 167 hand-labelled Indian
-  plots. Boundary F on held-out Indian crops 0.49 → **0.61**; on a held-out
-  Dutch city 43% → **53%** of official parcels matched at IoU 0.5.
-  `training/parcel_boundary`.
+  plots. Boundary F on held-out Indian crops 0.49 → **0.61**. Scored against
+  800 registered parcels of the Dutch national cadastre, plots grown from the
+  houses alone match **34%** at IoU 0.5; stopping them at this model's lines
+  matches **53%** (mean IoU 0.37 → 0.48). `training/parcel_boundary`.
 
 - **Aerial ORI + DSM (laptop fallback)** — U-Net ResNet34 trained on ISPRS
   Potsdam: test tiles mIoU 0.723, building IoU 0.913. `training/potsdam_unet`.
