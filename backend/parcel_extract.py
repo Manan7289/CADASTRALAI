@@ -37,6 +37,7 @@ from skimage.morphology import disk, remove_small_objects, remove_small_holes, s
 from skimage.segmentation import watershed
 from skimage.filters import sobel
 
+import regularise
 from topology import clean_polygon
 from road_network import WIDTH_CLASSES, bridge_lane_gaps, road_segments
 from plot_layout import KIND_LABEL, layout_parcels, nearest_parcels
@@ -530,6 +531,10 @@ def extract(probs, rgb, transform: Affine, ndsm=None, valid=None, inst_override=
     # coverage simplification can pinch a plot into a figure-8; keep it one valid polygon
     parcel_polys = {k: (g if g.is_valid else clean_polygon(g)) for k, g in cover_polys.items()}
     building_polys = {k: regularise_building(g) for k, g in vectorise(inst, transform).items()}
+    # Plot lines the way a surveyor draws them: straight, shared with the neighbour, along the
+    # grid the houses sit on (see regularise.py). Sizes are left as found.
+    parcel_polys = {k: (g if g.is_valid else clean_polygon(g))
+                    for k, g in regularise.regularise(parcel_polys, building_polys, exclude=corridor_polys.get(1)).items()}
     road_poly = shapely.union_all(list(corridor_polys.values())) if corridor_polys else None
     bchecks = building_checks(building_polys, road_poly, inst, parcels, ndsm)
 
