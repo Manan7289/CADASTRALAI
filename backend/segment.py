@@ -1,0 +1,234 @@
+"""Run the trained segmentation model on a georeferenced survey.
+
+Inputs: an orthoimage GeoTIFF (ORI) and, optionally, DSM + DTM GeoTIFFs (or a
+ready nDSM). Everything is warped onto one grid in the AOI's UTM zone at the
+model's ground resolution (10 cm), so pixel areas are true square metres and
+DSM/DTM are co-registered with the image before nDSM = DSM - DTM.
+
+The model is height-optional (trained with height dropout): without a DSM
+the height channel is fed as zeros, and the output says so.
+"""
+import os
+from pathlib import Path
+
+import numpy as np
+from scipy import ndimage as ndi
+import rasterio
+import torch
+from rasterio.transform import from_origin
+from rasterio.vrt import WarpedVRT
+from rasterio.warp import Resampling, transform_bounds
+
+import dtm as dtm_mod
+from export import utm_crs_for
+
+MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+# Two checkpoints, chosen per survey. Numbers are the held-out results they were accepted on.
+MODELS = {
+    "stack_dplus": {
+        "file": None, "kind": "kaggle", "gsd_m": 0.3,
+        "label": "Approved stack on Kaggle GPU: roofs D+ (our U-Net + Mask R-CNN + teammate Inria/UAVid) + land cover v2",
+        "summary": "The shipped models. Roofs (fine-tuned on Indian roofs): 51% of houses found on held-out Indian crops (was 15%), "
+                   "Gandhinagar exam 89%. "
+                   "Land cover mIoU 0.67. Runs on Kaggle (a few minutes); the laptop only prepares and imports.",
+        "limits": "Needs internet and the team's Kaggle token. Processed at 0.3 m; a DSM, if uploaded, is still used "
+                  "for boundary edges.",
+    },
+    "aerial_dsm": {
+        "file": "unet_potsdam.pt",
+        "label": "Aerial ORI + DSM (trained on ISPRS Potsdam)",
+        "summary": "U-Net ResNet34, RGB + height. Potsdam test tiles: mIoU 0.723, building IoU 0.913.",
+        "limits": "Misses many plain grey concrete roofs in Indian settlements when used without a DSM.",
+    },
+    "landcover_v2": {
+        "file": "landcover_v2_segformer/landcover_v2_segformer_b2.pt",
+        "kind": "landcover", "gsd_m": 0.3,
+        "label": "Colour imagery: land cover v2 (SegFormer-B2, OpenEarthMap) + houses split from its building map",
+        "summary": "8 classes, 44 countries. OpenEarthMap validation mIoU 0.67 (road 0.65, tree 0.71, grass 0.58, bare land 0.44). "
+                   "Runs on a laptop CPU at 0.3 m.",
+        "limits": "Houses are split from the building map, so touching houses can merge or split wrongly (check them); "
+                  "processed at 0.3 m. The stacked roof model gives cleaner per-house outlines but needs a GPU (Kaggle).",
+    },
+}
+# the Vijayawada fine-tune (unet_vijayawada_ft_v2.pt) was retired on 2026-09-19: it called most of a leafy
+# Bengaluru street "building" and no tree at all
+# CADASTRAAI_MODEL lets a dev run point every survey at another checkpoint (e.g. the smoke-test weights)
+_OVERRIDE = os.environ.get("CADASTRAAI_MODEL")
+MODEL_PATH = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS["aerial_dsm"]["file"]
+
+
+def choose_model(key, has_height):
+    """'auto' picks the approved stack on Kaggle when Kaggle is reachable, else the land-cover
+    model on the laptop. Returns (key, path, info)."""
+    if key in (None, "", "auto"):
+        import kaggle_jobs
+        key = "stack_dplus" if kaggle_jobs.available() else "landcover_v2"
+    if key not in MODELS:
+        raise ValueError(f"Unknown model '{key}'.")
+    if MODELS[key].get("kind") == "kaggle":
+        return key, None, MODELS[key]
+    path = Path(_OVERRIDE) if _OVERRIDE else MODELS_DIR / MODELS[key]["file"]
+    if not path.exists():
+        raise ValueError(f"Model file {path.name} is missing from models/.")
+    return key, path, MODELS[key]
+NDSM_SCALE_M = 30.0   # Potsdam's normalised DSM jpgs map 0..255 to roughly 0..30 m above ground
+_model_cache = {}
+
+
+def device():
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def load_model(path=MODEL_PATH):
+    key = str(path)
+    if key not in _model_cache:
+        import segmentation_models_pytorch as smp
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        m = smp.Unet("resnet34", encoder_weights=None, in_channels=ckpt["in_channels"], classes=len(ckpt["classes"]))
+        m.load_state_dict(ckpt["state_dict"])
+        m.eval().to(device())
+        _model_cache[key] = (m, ckpt)
+    return _model_cache[key]
+
+
+def warp_to_grid(path, dst_crs, dst_transform, width, height, bands=None, resampling=Resampling.bilinear):
+    """Read only the part of the source that falls on the target grid (via a
+    WarpedVRT, which also uses the file's overviews when downsampling), so a
+    multi-GB orthomosaic never has to be loaded whole."""
+    with rasterio.open(path) as src:
+        idx = bands or list(range(1, src.count + 1))
+        # add_alpha marks which target pixels the source actually covers, so the area outside the
+        # file is NaN even when the file declares no nodata value (otherwise it silently reads as 0)
+        with WarpedVRT(src, crs=dst_crs, transform=dst_transform, width=width, height=height,
+                       resampling=resampling, src_nodata=src.nodata, add_alpha=True) as vrt:
+            out = vrt.read(idx, out_dtype="float32", masked=True).filled(np.nan)
+            covered = vrt.read(vrt.count) > 0
+    out[:, ~covered] = np.nan
+    return out
+
+
+def prepare_grid(ori_path, gsd_m, aoi_lonlat=None):
+    """Target grid in the AOI's UTM zone at gsd_m. aoi_lonlat = (west, south,
+    east, north) restricts it to an area of interest inside the survey."""
+    with rasterio.open(ori_path) as src:
+        if src.crs is None:
+            raise ValueError("The orthoimage has no coordinate reference system -- georeference it first.")
+        full = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+    w, s, e, n = aoi_lonlat if aoi_lonlat else full
+    w, s, e, n = max(w, full[0]), max(s, full[1]), min(e, full[2]), min(n, full[3])
+    if w >= e or s >= n:
+        raise ValueError("The selected area does not overlap the orthoimage.")
+    dst_crs = utm_crs_for((w + e) / 2, (s + n) / 2)
+    left, bottom, right, top = transform_bounds("EPSG:4326", dst_crs, w, s, e, n)
+    width, height = int(np.ceil((right - left) / gsd_m)), int(np.ceil((top - bottom) / gsd_m))
+    return dst_crs, from_origin(left, top, gsd_m, gsd_m), width, height
+
+
+def load_survey(ori_path, dsm_path=None, dtm_path=None, ndsm_path=None, gsd_m=0.10, aoi_lonlat=None):
+    crs, transform, w, h = prepare_grid(ori_path, gsd_m, aoi_lonlat)
+    rgb = warp_to_grid(ori_path, crs, transform, w, h, bands=[1, 2, 3], resampling=Resampling.average)
+    valid = np.isfinite(rgb).all(0) & (np.nan_to_num(rgb).sum(0) > 0)
+    rgb = np.nan_to_num(rgb).clip(0, 255).astype(np.uint8).transpose(1, 2, 0)
+    ndsm, height_source = None, None
+    if ndsm_path:
+        ndsm, height_source = warp_to_grid(ndsm_path, crs, transform, w, h, bands=[1])[0], "nDSM supplied"
+    elif dsm_path and dtm_path:
+        ndsm = (warp_to_grid(dsm_path, crs, transform, w, h, bands=[1])[0]
+                - warp_to_grid(dtm_path, crs, transform, w, h, bands=[1])[0])
+        height_source = "DSM and DTM supplied"
+    elif dsm_path:
+        dsm = warp_to_grid(dsm_path, crs, transform, w, h, bands=[1])[0]
+        known = np.isfinite(dsm)
+        # fill nodata (e.g. the border outside the survey) with the nearest real surface value; filling
+        # with the minimum made the ground filter read every survey edge as a tall object
+        _, (iy, ix) = ndi.distance_transform_edt(~known, return_indices=True)
+        ndsm, _ = dtm_mod.ndsm_from_dsm(dsm[iy, ix], gsd_m)
+        ndsm[~known] = 0.0
+        height_source = "DSM supplied, DTM derived by ground filter"
+    if ndsm is not None:
+        ndsm = np.clip(np.nan_to_num(ndsm), 0, NDSM_SCALE_M)
+    return {"rgb": rgb, "ndsm": ndsm, "valid": valid, "crs": crs, "transform": transform,
+            "height_source": height_source}
+
+
+@torch.no_grad()
+def predict(rgb, ndsm=None, crop=512, overlap=128, model_path=MODEL_PATH):
+    model, ckpt = load_model(model_path)
+    mean = np.array(ckpt["mean"], dtype=np.float32)
+    std = np.array(ckpt["std"], dtype=np.float32)
+    H, W = rgb.shape[:2]
+    height_u8 = np.zeros((H, W), np.float32) if ndsm is None else ndsm / NDSM_SCALE_M * 255.0
+    x = np.dstack([rgb.astype(np.float32), height_u8]) / 255.0
+    x = (x - mean) / std
+    if ndsm is None:
+        x[..., 3] = 0.0
+    pad_h, pad_w = max(0, crop - H), max(0, crop - W)
+    x = np.pad(x, ((0, pad_h), (0, pad_w), (0, 0)), mode="reflect")
+    Hp, Wp = x.shape[:2]
+    stride = crop - overlap
+    starts = lambda n: sorted(set(list(range(0, n - crop + 1, stride)) + [n - crop]))
+    probs = np.zeros((len(ckpt["classes"]), Hp, Wp), np.float32)
+    weight = np.zeros((Hp, Wp), np.float32)
+    ramp = np.minimum(np.arange(crop) + 1, np.arange(crop)[::-1] + 1).astype(np.float32)
+    win = np.minimum.outer(ramp, ramp)
+    win /= win.max()
+    dev = device()
+    for i in starts(Hp):
+        tiles = [torch.from_numpy(np.ascontiguousarray(x[i:i + crop, j:j + crop].transpose(2, 0, 1))) for j in starts(Wp)]
+        out = torch.softmax(model(torch.stack(tiles).to(dev)), 1).cpu().numpy()
+        for k, j in enumerate(starts(Wp)):
+            probs[:, i:i + crop, j:j + crop] += out[k] * win
+            weight[i:i + crop, j:j + crop] += win
+    probs /= np.maximum(weight, 1e-6)
+    return probs[:, :H, :W], ckpt["classes"]
+
+
+# ---------------------------------------------------------------- land cover v2 (8 classes)
+IMNET_MEAN = np.array([0.485, 0.456, 0.406], np.float32)
+IMNET_STD = np.array([0.229, 0.224, 0.225], np.float32)
+
+
+class _FullRes(torch.nn.Module):
+    """SegFormer predicts at 1/4 resolution; upsample to the input size (as in training)."""
+    def __init__(self, m):
+        super().__init__()
+        self.m = m
+
+    def forward(self, x):
+        o = self.m(x)
+        return o if o.shape[-2:] == x.shape[-2:] else torch.nn.functional.interpolate(
+            o, size=x.shape[-2:], mode="bilinear", align_corners=False)
+
+
+def load_landcover(path):
+    key = str(path)
+    if key not in _model_cache:
+        import segmentation_models_pytorch as smp
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        net = _FullRes(smp.Segformer("mit_b2", encoder_weights=None, in_channels=3, classes=9))
+        net.load_state_dict(ck["state_dict"])
+        _model_cache[key] = (net.eval(), ck)
+    return _model_cache[key][0]
+
+
+def predict_landcover(rgb, model_path, tile=512, stride=384):
+    """(9,H,W) class probabilities (index 0 = unlabelled, never predicted). CPU, about 15 s and
+    under 1 GB for a 0.17 km2 area at 0.3 m."""
+    net = load_landcover(model_path)
+    h, w = rgb.shape[:2]
+    im = np.pad(rgb, ((0, max(0, tile - h)), (0, max(0, tile - w)), (0, 0)), mode="reflect")
+    H, W = im.shape[:2]
+    x = torch.from_numpy(((im.astype(np.float32) / 255 - IMNET_MEAN) / IMNET_STD).transpose(2, 0, 1)[None])
+    acc = np.zeros((9, H, W), np.float32)
+    cnt = np.zeros((H, W), np.float32)
+    starts = lambda n: sorted(set(list(range(0, n - tile + 1, stride)) + [n - tile]))
+    with torch.inference_mode():
+        for y in starts(H):
+            for xx in starts(W):
+                o = net(x[:, :, y:y + tile, xx:xx + tile])
+                o[:, 0] = -1e4
+                acc[:, y:y + tile, xx:xx + tile] += o.softmax(1)[0].numpy()
+                cnt[y:y + tile, xx:xx + tile] += 1
+    return (acc / cnt)[:, :h, :w]

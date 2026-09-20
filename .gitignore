@@ -19,3 +19,15 @@ dist/
 # Large generated files
 *.tif
 *.tiff
+# CadastraAI finale
+.DS_Store
+data/intake/
+data/kaggle_jobs/
+data/raw/tiles/
+data/raw/uploads/
+data/surveys/
+data/surveys_trash/
+data/training_labels/
+data/uploads/
+models/
+training/ensemble_v2/build/
