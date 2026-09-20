@@ -24,7 +24,7 @@ import kaggle_dns  # noqa: F401  (resolver fallback for api.kaggle.com on some n
 ROOT = Path(__file__).resolve().parent.parent
 JOBS_DIR = ROOT / "data" / "kaggle_jobs"
 GSD_M = 0.3
-MODEL_DATASETS = ["cadastraai-friend-models", "cadastraai-roofs-v1"]
+MODEL_DATASETS = ["cadastraai-friend-models", "cadastraai-roofs-v1", "cadastraai-roofs-v2-india"]
 MODEL_KERNELS = ["cadastraai-friend-bakeoff", "cadastraai-landcover-v2-segformer", "cadastraai-parcel-boundary", "cadastraai-boundary-india"]
 SOURCES = {"bakeoff_friend.py": ROOT / "training/ensemble/bakeoff_friend.py",
            "demo_bundles.py": ROOT / "training/deploy/demo_bundles.py",
@@ -37,7 +37,8 @@ MODEL_INFO = {
     "key": "stack_dplus_landcover_v2",
     "name": "Roofs: stacked ensemble (our U-Net + Mask R-CNN, teammate Inria + UAVid maps); "
             "land cover: SegFormer-B2 (OpenEarthMap); run on Kaggle GPU",
-    "summary": "Roofs, fair Gandhinagar exam: 88% of houses found, 12.5% of touching pairs merged, outline IoU 0.89. "
+    "summary": "Roofs (D+ fine-tuned on Indian roofs incl. UAVPal Bhopal drone data): held-out Indian crops 51% of houses found "
+               "(15% before), building IoU 0.81; Bhopal hold-out 40% found (5% before); Gandhinagar exam unchanged at 89%. "
                "Roofs the stack misses but land cover marks as building are filled in and tagged for review. "
                "Land cover, OpenEarthMap validation: mIoU 0.67 (road 0.65, tree 0.71, grass 0.58, bare land 0.44). "
                "Parcels: plots grow from each house and stop at the parcel-boundary model's lines (U-Net trained on Dutch "
