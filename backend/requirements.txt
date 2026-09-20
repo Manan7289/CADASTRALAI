@@ -14,6 +14,7 @@ segmentation_models_pytorch==0.5.0
 torch==2.14.0
 requests==2.32.5
 scikit-learn==1.7.2
+kaggle==2.2.4                  # only for the Kaggle GPU path; the app runs without it
 
 # backend/ml/ (teammate training scripts for the Inria / UAVid models) also use:
 #   torchvision  huggingface-hub==1.31.0
