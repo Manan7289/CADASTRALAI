@@ -25,13 +25,14 @@ MODEL_INFO = {
     "name": "Roofs: stacked ensemble (our U-Net + Mask R-CNN, teammate Inria + UAVid maps); "
             "land cover: SegFormer-B2 (OpenEarthMap)",
     "summary": "Roofs the stack misses but land cover marks as building are filled in and tagged for review. "
-               "Roofs, fair Gandhinagar exam: 88% of houses found, 12.5% of touching pairs merged, outline IoU 0.89. "
+               "Roofs (D+ fine-tuned on Indian roofs incl. UAVPal Bhopal drone data): held-out Indian crops 51% of houses found "
+               "(15% before), building IoU 0.81; Bhopal hold-out 40% found (5% before); Gandhinagar exam unchanged at 89%. "
                "Land cover, OpenEarthMap validation: mIoU 0.67 (road 0.65, tree 0.71, grass 0.58, bare land 0.44). "
                "Parcels: plots grow from each house and stop at the parcel-boundary model's lines (U-Net trained on Dutch "
                "cadastral parcels, fine-tuned on hand-labelled Indian plots): boundary F 0.61 on held-out Indian crops "
                "(0.49 before the India fine-tune); on a held-out Dutch city 53% of official parcels matched at IoU 0.5.",
-    "limits": "Roofs trained on one planned Indian sector plus WHU; misses some red-tile / dark roofs and very "
-              "dense blocks. Land cover weakest on bare land (IoU 0.44). Satellite imagery ~0.3 m, not drone.",
+    "limits": "Roofs: about half of Indian houses found on held-out crops; some large roofs split in two and "
+              "outlines of big irregular buildings are rough. Land cover weakest on bare land (IoU 0.44). Satellite imagery ~0.3 m, not drone.",
 }
 
 

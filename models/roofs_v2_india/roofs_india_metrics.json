@@ -1,0 +1,65 @@
+{
+  "before": {
+    "india": {
+      "houses_found": "8/53",
+      "recall": 0.151,
+      "outline_iou": 0.797,
+      "merged_pairs": "26/58",
+      "merge_rate": 0.448,
+      "unmatched_shapes": 8,
+      "building_iou": 0.523
+    },
+    "bhopal": {
+      "houses_found": "63/1210",
+      "recall": 0.052,
+      "outline_iou": 0.714,
+      "merged_pairs": "234/2099",
+      "merge_rate": 0.111,
+      "unmatched_shapes": 45,
+      "building_iou": 0.176
+    },
+    "gandhinagar": {
+      "houses_found": "127/145",
+      "recall": 0.876,
+      "outline_iou": 0.89,
+      "merged_pairs": "7/56",
+      "merge_rate": 0.125,
+      "unmatched_shapes": 15,
+      "building_iou": 0.882
+    }
+  },
+  "after": {
+    "india": {
+      "houses_found": "27/53",
+      "recall": 0.509,
+      "outline_iou": 0.749,
+      "merged_pairs": "15/58",
+      "merge_rate": 0.259,
+      "unmatched_shapes": 64,
+      "building_iou": 0.812
+    },
+    "bhopal": {
+      "houses_found": "485/1210",
+      "recall": 0.401,
+      "outline_iou": 0.734,
+      "merged_pairs": "485/2099",
+      "merge_rate": 0.231,
+      "unmatched_shapes": 483,
+      "building_iou": 0.68
+    },
+    "gandhinagar": {
+      "houses_found": "129/145",
+      "recall": 0.89,
+      "outline_iou": 0.896,
+      "merged_pairs": "5/56",
+      "merge_rate": 0.089,
+      "unmatched_shapes": 16,
+      "building_iou": 0.878
+    }
+  },
+  "steps": 2000,
+  "india_train_crops": 7,
+  "india_test_crops": 3,
+  "bhopal_train_crops": 48,
+  "bhopal_test_crops": 8
+}
