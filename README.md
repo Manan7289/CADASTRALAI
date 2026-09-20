@@ -85,6 +85,17 @@ For the field page on a phone (browsers only give GPS to HTTPS pages):
 Every model is also checked visually on held-out imagery before it is used;
 pixel metrics alone have hidden a degenerate fine-tune before.
 
+## The earlier demo (kept from `main`)
+
+The pre-finale build is still here: the static pages `frontend/index.html`,
+`detection.html`, `model.html`, `cadastraai-demo.html` (what Vercel serves),
+the OSM + RandomForest pipeline in `backend/fetch_data.py`, `model.py`,
+`parcels.py`, `rules.py`, the teammate's Inria / UAVid training scripts in
+`backend/ml/`, and its own dev server `backend/legacy_demo_app.py` with
+`frontend/upload-legacy.html`. Run that one with
+`.venv/bin/python backend/legacy_demo_app.py`; the finale app above is
+`backend/app.py`.
+
 ## Tests
 
 ```bash
