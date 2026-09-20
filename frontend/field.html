@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CadastraAI — Field Verification</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0D1310">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders:wght@700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="/vendor/leaflet.css">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="workbench.css">
+<style>
+  html,body{height:100%;overflow:hidden;}
+  .fv{position:fixed;inset:0;display:flex;flex-direction:column;}
+  .fv-top{display:flex;align-items:center;gap:10px;padding:10px 14px;padding-top:max(10px,env(safe-area-inset-top));background:var(--bg-elevated);border-bottom:1px solid var(--border);z-index:1000;}
+  .fv-top .wordmark{font-family:var(--font-display);font-weight:900;font-size:1.15rem;text-transform:uppercase;}
+  .fv-top .wordmark span{color:var(--accent);}
+  .fv-top select{flex:1;min-width:0;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-size:0.85rem;}
+  .fv-top a{font-family:var(--font-mono);font-size:0.62rem;color:var(--text-faint);text-decoration:none;white-space:nowrap;}
+  #map{flex:1;}
+  .gps-chip{position:absolute;top:calc(64px + env(safe-area-inset-top));left:12px;z-index:900;background:rgba(18,26,21,0.94);border:1px solid var(--border);border-radius:20px;padding:6px 11px;font-family:var(--font-mono);font-size:0.66rem;color:var(--text-dim);}
+  .gps-chip.ok{color:var(--ok);border-color:rgba(108,190,129,0.5);}
+  .gps-chip.bad{color:var(--warning);border-color:rgba(224,169,74,0.5);}
+  .locate{position:absolute;top:calc(64px + env(safe-area-inset-top));right:12px;z-index:900;width:44px;height:44px;border-radius:50%;border:1px solid var(--border);background:rgba(18,26,21,0.94);color:var(--accent);font-size:1.2rem;cursor:pointer;}
+  .sheet{position:relative;z-index:1000;background:var(--surface);border-top:1px solid var(--border);border-radius:16px 16px 0 0;max-height:52vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -10px 30px rgba(0,0,0,0.35);}
+  .sheet.collapsed .sheet-body{display:none;}
+  .grab{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 16px;cursor:pointer;}
+  .grab::before{content:"";position:absolute;left:50%;top:5px;width:38px;height:4px;border-radius:2px;background:var(--border);transform:translateX(-50%);}
+  .grab b{font-family:var(--font-display);font-size:1.05rem;text-transform:uppercase;}
+  .sheet-body{overflow-y:auto;padding:0 16px 18px;display:flex;flex-direction:column;gap:14px;}
+  .verdicts{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .verdicts button{padding:13px 10px;border-radius:10px;border:1px solid var(--border);background:var(--surface-2);color:var(--text);font-size:0.84rem;text-align:left;cursor:pointer;line-height:1.25;}
+  .verdicts button.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);}
+  .verdicts button[data-v="confirmed"]{grid-column:1/-1;}
+  textarea,.fv input[type=text]{width:100%;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:10px;color:var(--text);font-family:var(--font-body);font-size:0.9rem;}
+  textarea{min-height:64px;resize:vertical;}
+  .photo-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  .photo-row img{width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--border);}
+  .filebtn{display:inline-flex;align-items:center;gap:6px;padding:11px 14px;border-radius:9px;border:1px dashed var(--border);color:var(--text-dim);font-size:0.84rem;cursor:pointer;}
+  .filebtn input{display:none;}
+  .big{padding:14px;font-size:0.95rem;}
+  .dist{font-family:var(--font-mono);font-size:0.72rem;}
+  .visits{display:flex;flex-direction:column;gap:6px;}
+  .visit{background:var(--surface-2);border-radius:8px;padding:8px 10px;font-size:0.76rem;color:var(--text-dim);}
+  .visit b{color:var(--text);}
+  .toast{top:calc(110px + env(safe-area-inset-top));}
+</style>
+</head>
+<body>
+<div class="fv">
+  <div class="fv-top">
+    <div class="wordmark">CADASTRA<span>AI</span></div>
+    <select id="surveySelect" aria-label="Survey"></select>
+    <a href="workbench.html">DESK&nbsp;VIEW</a>
+  </div>
+  <div id="map" class="map-panel"></div>
+  <div class="gps-chip" id="gpsChip">GPS: starting…</div>
+  <button class="locate" id="locateBtn" title="Centre on my location" aria-label="Centre on my location">◎</button>
+  <section class="sheet" id="sheet">
+    <div class="grab" id="grab"><b id="sheetTitle">Field checks</b><span class="note" id="sheetSub"></span></div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </section>
+</div>
+
+<script src="/vendor/leaflet.js"></script>
+<script src="field.js"></script>
+</body>
+</html>
